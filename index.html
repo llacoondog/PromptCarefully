@@ -240,13 +240,13 @@
     <!-- Gemini API 키 설정 모달 -->
     <div id="settings-modal" class="modal-backdrop hidden">
       <div class="modal-card">
-        <h3>🔑 Gemini API 키 설정</h3>
+        <h3>🔑 Gemini AI 설정</h3>
         <p class="modal-desc">
-          Google AI Studio의 Gemini API 키를 넣으면 최신 <strong>Gemini 3.8 Flash</strong>가 실시간으로 분석해!<br>
-          (키가 없어도 <strong>내장 자연어 경로 AI</strong>로 즉시 멀티플레이가 가능해!)
+          기본적으로 <strong>공유 프록시</strong>를 통해 최신 <strong>Gemini Flash</strong>가 자동 지원돼!<br>
+          (개인 API 키를 넣으면 본인의 전용 Gemini 할당량으로 우선 호출됩니다.)
         </p>
         <div class="modal-input-group">
-          <input type="password" id="api-key-input" placeholder="AIzaSy..." />
+          <input type="password" id="api-key-input" placeholder="개인 API 키 (선택 사항: AIzaSy...)" />
         </div>
         <div class="modal-buttons">
           <button id="btn-save-key" class="btn-primary">저장</button>
@@ -262,6 +262,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/game.js?v=11"></script>
+  <script type="module" src="js/game.js?v=12"></script>
 </body>
 </html>

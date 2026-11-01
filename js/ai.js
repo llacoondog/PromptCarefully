@@ -5,6 +5,8 @@
 
 const API_TIMEOUT_MS = 3200;
 
+export const DEFAULT_PROXY_URL = 'https://promptcarefully.asdfjiwoo.workers.dev';
+
 const DIRS = [
   { dx: 0, dz: 1, name: '아래(+Z)' },  // 0: Down (+Z)
   { dx: 1, dz: 0, name: '오른쪽(+X)' }, // 1: Right (+X)
@@ -15,6 +17,7 @@ const DIRS = [
 export class RobotAI {
   constructor() {
     this.apiKey = this.cleanKey(localStorage.getItem('GEMINI_API_KEY') || '');
+    this.proxyUrl = localStorage.getItem('GEMINI_PROXY_URL') || DEFAULT_PROXY_URL;
     this.preferredModel = null;
   }
 
@@ -37,6 +40,24 @@ export class RobotAI {
     return this.apiKey;
   }
 
+  setProxyUrl(url) {
+    this.proxyUrl = (url || '').trim();
+    if (this.proxyUrl) {
+      localStorage.setItem('GEMINI_PROXY_URL', this.proxyUrl);
+    } else {
+      localStorage.removeItem('GEMINI_PROXY_URL');
+      this.proxyUrl = DEFAULT_PROXY_URL;
+    }
+  }
+
+  getProxyUrl() {
+    return this.proxyUrl || DEFAULT_PROXY_URL;
+  }
+
+  hasApiCapability() {
+    return Boolean(this.apiKey || this.proxyUrl);
+  }
+
   /**
    * 유저의 자연어 프롬프트를 분석하여
    * 1) 단계별 생각 과정(thoughts)과
@@ -54,7 +75,7 @@ export class RobotAI {
       () => apiAdopted
     );
 
-    if (this.apiKey) {
+    if (this.hasApiCapability()) {
       const startTime = performance.now();
       try {
         const apiResult = await this.callGeminiAPI(
@@ -184,7 +205,13 @@ export class RobotAI {
     onApiStreamUpdate,
     timeoutMs
   ) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+    let url;
+    if (this.apiKey) {
+      url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+    } else {
+      const baseProxy = (this.proxyUrl || DEFAULT_PROXY_URL).replace(/\/+$/, '');
+      url = `${baseProxy}/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
+    }
 
     const promptText = `당신은 3D 복셀 액션 게임 "Prompt Carefully"의 귀엽고 고지식한 길치 로봇입니다.
 유저가 구체적인 방향(오른쪽/아래 등)과 장애물 대처법(가시 점프, 파란 점프대 밟기 등)을 순서대로 알려주면 그에 맞춰 생각하고 움직이지만,
