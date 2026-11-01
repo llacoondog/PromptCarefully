@@ -25,9 +25,13 @@ export default {
       const targetUrl = new URL(`https://generativelanguage.googleapis.com${url.pathname}${url.search}`);
       
       // Cloudflare Secret에 저장된 내 API 키 주입
-      const apiKey = env.GEMINI_API_KEY;
+      const apiKey = env?.GEMINI_API_KEY || (typeof GEMINI_API_KEY !== 'undefined' ? GEMINI_API_KEY : null);
       if (!apiKey) {
-        return new Response(JSON.stringify({ error: "Worker 환경 변수에 GEMINI_API_KEY가 설정되지 않았습니다." }), {
+        const availableKeys = Object.keys(env || {}).join(', ');
+        return new Response(JSON.stringify({ 
+          error: "Worker 환경 변수에 GEMINI_API_KEY가 설정되지 않았습니다.",
+          debugEnvKeys: availableKeys || "(empty)"
+        }), {
           status: 500,
           headers: {
             "Content-Type": "application/json",
