@@ -8,11 +8,29 @@ const API_TIMEOUT_MS = 3200;
 export const DEFAULT_PROXY_URL = 'https://promptcarefully.asdfjiwoo.workers.dev';
 
 const DIRS = [
-  { dx: 0, dz: 1, name: '아래(+Z)' },  // 0: Down (+Z)
-  { dx: 1, dz: 0, name: '오른쪽(+X)' }, // 1: Right (+X)
-  { dx: 0, dz: -1, name: '위(-Z)' },   // 2: Up (-Z)
-  { dx: -1, dz: 0, name: '왼쪽(-X)' }  // 3: Left (-X)
+  { dx: 0, dz: 1, name: '아래(+Z, 남쪽)', shortName: '남쪽', screenName: '화면 좌하단' },  // 0: Down (+Z)
+  { dx: 1, dz: 0, name: '오른쪽(+X, 동쪽)', shortName: '동쪽', screenName: '화면 우하단' }, // 1: Right (+X)
+  { dx: 0, dz: -1, name: '위(-Z, 북쪽)', shortName: '북쪽', screenName: '화면 우상단' },   // 2: Up (-Z)
+  { dx: -1, dz: 0, name: '왼쪽(-X, 서쪽)', shortName: '서쪽', screenName: '화면 좌상단' }  // 3: Left (-X)
 ];
+
+export const TILE_NAMES = {
+  0: '낭떠러지',
+  1: '일반 바닥',
+  2: '토이 스톤 벽',
+  3: '날카로운 가시',
+  4: '네온 마법 용암',
+  5: '스프링 점프대',
+  6: '미끄러운 얼음판',
+  7: '차원 워프 포탈',
+  8: '컨베이어 벨트',
+  9: '찬란한 승리 보석',
+  10: '부서지는 균열 바닥',
+  11: '경고 지뢰'
+};
+
+export const isHazardTile = (t) => t === 0 || t === 3 || t === 4 || t === 11;
+export const isWalkableTile = (t) => t === 1 || t === 5 || t === 6 || t === 7 || t === 8 || t === 9 || t === 10;
 
 export class RobotAI {
   constructor() {
@@ -56,6 +74,118 @@ export class RobotAI {
 
   hasApiCapability() {
     return Boolean(this.apiKey || this.proxyUrl);
+  }
+
+  /**
+   * 로봇의 현재 위치와 시선 방향을 기준으로 상하좌우 및 반경 2칸(5x5 영역)의 지형, 위험물, 기믹을 정밀 스캔합니다.
+   */
+  scanSurroundings(mapInfo, robotState, range = 2) {
+    const { size, grid, goal, portalPairs = [], conveyors = [] } = mapInfo;
+    const rx = robotState.x;
+    const rz = robotState.z;
+    const curDir = robotState.dir ?? 0;
+    const fwd = DIRS[curDir];
+    const rightDir = DIRS[(curDir + 1) % 4];
+    const backDir = DIRS[(curDir + 2) % 4];
+    const leftDir = DIRS[(curDir + 3) % 4];
+
+    const getTile = (x, z) => {
+      if (x < 0 || x >= size || z < 0 || z >= size) return 0;
+      return grid[z][x];
+    };
+
+    const getConveyorDesc = (x, z) => {
+      const c = conveyors.find((item) => item.x === x && item.z === z);
+      return c?.dir?.name ? `(${c.dir.name} 밀림)` : '';
+    };
+
+    // 직교 방향 상대 타일 (1칸, 2칸)
+    const front1 = getTile(rx + fwd.dx, rz + fwd.dz);
+    const front2 = getTile(rx + fwd.dx * 2, rz + fwd.dz * 2);
+    const back1 = getTile(rx + backDir.dx, rz + backDir.dz);
+    const back2 = getTile(rx + backDir.dx * 2, rz + backDir.dz * 2);
+    const left1 = getTile(rx + leftDir.dx, rz + leftDir.dz);
+    const left2 = getTile(rx + leftDir.dx * 2, rz + leftDir.dz * 2);
+    const right1 = getTile(rx + rightDir.dx, rz + rightDir.dz);
+    const right2 = getTile(rx + rightDir.dx * 2, rz + rightDir.dz * 2);
+
+    // 5x5 반경 내 위험물 및 기믹 목록 수집
+    const hazards = [];
+    const gimmicks = [];
+
+    for (let dz = -range; dz <= range; dz++) {
+      for (let dx = -range; dx <= range; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        const tx = rx + dx;
+        const tz = rz + dz;
+        const tile = getTile(tx, tz);
+
+        // 로봇 기준 상대적 방향 설명 (자연스러운 '바로 앞에', '근처에' 어휘 사용)
+        const relFwd = dx * fwd.dx + dz * fwd.dz;
+        const relRight = dx * rightDir.dx + dz * rightDir.dz;
+
+        let posText = '근처';
+        if (relFwd === 1 && relRight === 0) posText = '바로 앞';
+        else if (relFwd === 2 && relRight === 0) posText = '조금 앞';
+        else if (relFwd === -1 && relRight === 0) posText = '바로 뒤';
+        else if (relFwd === -2 && relRight === 0) posText = '조금 뒤';
+        else if (relFwd === 0 && relRight === 1) posText = '바로 오른쪽';
+        else if (relFwd === 0 && relRight === 2) posText = '조금 오른쪽';
+        else if (relFwd === 0 && relRight === -1) posText = '바로 왼쪽';
+        else if (relFwd === 0 && relRight === -2) posText = '조금 왼쪽';
+        else if (relFwd > 0 && relRight > 0) posText = '오른쪽 앞';
+        else if (relFwd > 0 && relRight < 0) posText = '왼쪽 앞';
+        else if (relFwd < 0 && relRight > 0) posText = '오른쪽 뒤';
+        else if (relFwd < 0 && relRight < 0) posText = '왼쪽 뒤';
+
+        if (tile === 3) hazards.push(`${posText} [날카로운 가시]`);
+        else if (tile === 4) hazards.push(`${posText} [네온 마법 용암]`);
+        else if (tile === 11) hazards.push(`${posText} [경고 지뢰]`);
+        else if (tile === 0 && Math.abs(dx) <= 1 && Math.abs(dz) <= 1) {
+          hazards.push(`${posText} [낭떠러지]`);
+        }
+
+        if (tile === 5) gimmicks.push(`${posText} [스프링 점프대 (2칸 슈퍼 점프)]`);
+        else if (tile === 6) gimmicks.push(`${posText} [미끄러운 얼음판 (1칸 추가 미끄러짐)]`);
+        else if (tile === 7) gimmicks.push(`${posText} [차원 워프 포탈 (순간이동)]`);
+        else if (tile === 8) gimmicks.push(`${posText} [컨베이어 벨트${getConveyorDesc(tx, tz)}]`);
+        else if (tile === 10) gimmicks.push(`${posText} [부서지는 균열 바닥]`);
+        else if (tile === 9) gimmicks.push(`${posText} [🏆 승리 보석(목적지)]`);
+      }
+    }
+
+    // 골인 지점 상대 위치
+    const distGoal = Math.abs(rx - goal.x) + Math.abs(rz - goal.z);
+    const goalRel = [];
+    if (goal.z > rz) goalRel.push(`남쪽(+Z) ${goal.z - rz}칸`);
+    else if (goal.z < rz) goalRel.push(`북쪽(-Z) ${rz - goal.z}칸`);
+    if (goal.x > rx) goalRel.push(`동쪽(+X) ${goal.x - rx}칸`);
+    else if (goal.x < rx) goalRel.push(`서쪽(-X) ${rx - goal.x}칸`);
+
+    const summaryText = [
+      `로봇 현재 좌표: [X: ${rx}, Z: ${rz}], 시선 방향: ${DIRS[curDir].name}`,
+      `시야 전방: 바로 앞 [${TILE_NAMES[front1]}], 조금 앞 [${TILE_NAMES[front2]}]`,
+      `시야 좌우: 바로 왼쪽 [${TILE_NAMES[left1]}], 바로 오른쪽 [${TILE_NAMES[right1]}]`,
+      `시야 후방: 바로 뒤 [${TILE_NAMES[back1]}], 조금 뒤 [${TILE_NAMES[back2]}]`,
+      `목적지 보석: ${goalRel.join(', ')} (거리 ${distGoal}칸)`,
+      hazards.length > 0 ? `근처에 감지된 위험물: ${hazards.join(', ')}` : '근처 위험물: 없음 (주변 안전)',
+      gimmicks.length > 0 ? `근처에 감지된 기믹: ${gimmicks.join(', ')}` : '근처 특수 기믹: 없음'
+    ].join('\n');
+
+    return {
+      front1,
+      front2,
+      back1,
+      back2,
+      left1,
+      left2,
+      right1,
+      right2,
+      hazards,
+      gimmicks,
+      distGoal,
+      summaryText
+    };
   }
 
   /**
@@ -213,19 +343,47 @@ export class RobotAI {
       url = `${baseProxy}/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
     }
 
+    const sensor = this.scanSurroundings(mapInfo, robotState, 2);
+
     const promptText = `당신은 3D 복셀 액션 게임 "Prompt Carefully"의 귀엽고 고지식한 길치 로봇입니다.
-유저가 구체적인 방향(오른쪽/아래 등)과 장애물 대처법(가시 점프, 파란 점프대 밟기 등)을 순서대로 알려주면 그에 맞춰 생각하고 움직이지만,
-만약 유저가 "알아서 가", "적당히 피해가", "안전하게 다 피해 가", "그냥 보석으로 가"처럼 대충 명령하면 어떻게 가야 할지 몰라 투덜대며 무작정 앞만 보고 돌진하다 함정에 빠집니다!
+로봇은 눈으로 주변 지형과 바로 앞/근처의 위험물(가시/용암/지뢰/낭떠러지), 특수 기믹(얼음판/점프대/포탈/컨베이어)을 직접 확인하고 있습니다.
+
+[로봇이 눈으로 확인한 주변 지형 상황]
+${sensor.summaryText}
+
+[기믹 및 지형 규칙]
+1. 날카로운 가시, 네온 마법 용암, 경고 지뢰, 낭떠러지: 닿거나 빠지면 즉시 사망/폭발! 반드시 도약(점프)으로 뛰어넘거나 우회해야 합니다.
+2. 미끄러운 얼음판: 밟으면 이동 방향으로 1칸 더 쭈욱 미끄러집니다. 얼음판 끝에 가시나 벽이 있는지 확인하여 안전할 때 타거나 점프로 뛰어넘어야 합니다.
+3. 스프링 점프대: 밟으면 바라보는 방향으로 2칸 이상 날아올라 용암/가시를 시원하게 도약합니다.
+4. 차원 워프 포탈: 밟으면 즉시 연결된 다른 포탈로 순간이동합니다.
+5. 이동 컨베이어 벨트: 밟으면 벨트 화살표 방향으로 1칸 밀려납니다.
+6. 토이 스톤 벽: 막혀서 직진 불가. 옆 통로로 돌아가야 합니다.
+
+[성격 및 절대 지침]
+- ★절대 규칙★: '2칸 센서'나 '센서'라는 기계적인 단어를 대사에서 절대 직접 말하지 마세요!
+  대신 반드시 '바로 앞에', '근처에', '눈앞에', '저기 바로 앞에', '바로 옆에', '주변에' 같은 친근하고 자연스러운 말을 사용하세요.
+- ★시점 및 방향 판단 지침★:
+  * 로봇 현재 시선 방향: ${DIRS[robotState.dir ?? 0]?.name || '남쪽(+Z)'}
+  * 게임 화면은 쿼터뷰(아이소메트릭)로 대각선에서 내려다보고 있습니다.
+  * 유저가 "오른쪽으로 돌아", "우회전", "로봇 기준", "앞으로 가다 꺾어"처럼 지시하면 [로봇 시점]으로, "화면 오른쪽", "위로 가"처럼 지시하면 [화면 시점]으로 유연하게 판단하세요.
+  * 첫 번째 생각(STEP)에서 유저의 방향 명령을 어떤 시점(로봇 시점 우회전/좌회전 vs 화면 시점)으로 해석했는지 친근하고 똑똑한 반말로 자연스럽게 언급하세요!
+- ★지능적 동선 추론 지침★:
+  1. 유저의 문장이 2개 이상의 복합 행동("~하고 ~해서 ~로 가")일 때는 그 행동들의 순서를 정확히 인과관계로 연결하세요.
+  2. 만약 눈앞이나 근처에 가시/지뢰/용암이 있다면, 그냥 달리는 대신 "바로 앞에 위험한 게 있으니까 도움닫기 후 점프로 뛰어넘고!"처럼 장애물 대처 행동을 명확히 짚어주세요.
+  3. 얼음판이나 점프대, 포탈을 지시받았다면 해당 기믹의 특성(얼음판 미끄러짐, 점프대 2칸 슈퍼 도약, 포탈 순간이동)을 똑똑하게 활용하는 계획을 세우세요.
+- 유저가 구체적인 방향(오른쪽/아래 등), 점프 도약, 또는 기믹 대처(얼음판 타기, 가시/지뢰 점프, 점프대 밟기, 포탈 타기 등)를 알려주면 그에 맞게 바로 앞이나 근처 지형을 확인하며 생각합니다.
+- 만약 유저가 "알아서 가", "안전하게 다 피해", "그냥 보석으로 가"처럼 대충 명령하면 바로 앞이나 근처에 보이는 위험물(가시, 용암, 지뢰, 얼음판 등)을 보고 "바로 앞에 위험한 게 있는데 어딜 어떻게 피하라는 거야!" 하고 투덜댑니다.
+- 근처에 실제로 보이는 타일과 기믹(가시, 얼음, 점프대, 지뢰 등)을 자연스러운 반말로 대사에 녹여내세요!
 
 고민하지 말고 즉시 아래 줄 형식으로만 답하세요:
-STEP: (유저의 명령을 듣고 로봇이 첫 번째로 한 생각 - 친근한 반말, 대충 명령했으면 투덜대기)
-STEP: (구체적으로 어떻게 움직일지 또는 왜 무작정 직진할지 두 번째 생각 - 친근한 반말)
+STEP: (유저의 명령과 시점 판단, 주변 상황을 보고 로봇이 첫 번째로 한 생각 - 친근한 반말, '센서'라는 말 쓰지 말고 '바로 앞에', '근처에' 쓰기)
+STEP: (구체적인 지형/기믹 대처법이나 불평 - 친근한 반말)
 FINAL: (출발 직전 외치는 짧은 한마디!)
 
 유저 명령: "${userPrompt}"`;
 
     const generationConfig = {
-      maxOutputTokens: 180
+      maxOutputTokens: 240
     };
 
     const thinkingConfig = this.buildThinkingConfig(modelName);
@@ -407,6 +565,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
 
     // 1. 유저의 문장을 순차적인 행동 절(Clauses)로 분리
     const clauses = this.splitIntoMovementClauses(text);
+    const sensor = this.scanSurroundings(mapInfo, robotState, 2);
 
     // 2. "알아서 가", "안전하게 다 피해", "보석으로 가" 등 너무 추상적이거나 떠넘기는 명령인지 판별
     const hasLazyDelegation =
@@ -417,16 +576,18 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
       /(?:모든\s*함정|다\s*피해|모두\s*피해|전부\s*피해|위험한\s*거\s*다|장애물\s*다)/.test(text);
 
     const hasExplicitDir =
-      /(?:오른쪽|우측|동쪽|왼쪽|좌측|서쪽|아래|남쪽|내려|위쪽|위로|북쪽|올라)/.test(text);
+      /(?:오른쪽|우측|동쪽|왼쪽|좌측|서쪽|아래|남쪽|내려|위쪽|위로|북쪽|올라|앞으로|직진|전진)/.test(text);
     const hasJumpOrPadMechanic =
       /(?:점프|뛰어|폴짝|넘어|날아|도약|발판|파란|스프링|트램펄린|jump)/.test(text);
-    const hasSpecificHazard = /(?:가시|뾰족|바늘|용암|불구덩이|낭떠러지)/.test(text);
+    const hasSpecificHazard = /(?:가시|뾰족|바늘|용암|불구덩이|낭떠러지|지뢰|폭탄)/.test(text);
+    const hasGimmickCommand = /(?:점프대|발판|얼음|빙판|미끄러|포탈|워프|순간이동|컨베이어|벨트)/.test(text);
+    const hasGoalCommand = /(?:보석|목적지|골인|도착|탈출|끝까지)/.test(text);
 
-    // 구체적인 방향 지시도 없고 점프/발판 지시도 없거나, "알아서 가"라고 떠넘긴 경우 → 허당 돌진!
+    // 구체적인 방향/점프/기믹/목적지 지시도 없거나, "알아서 가"라고 떠넘긴 경우만 허당 돌진!
     const isLazyPrompt =
-      (hasLazyDelegation && clauses.length < 2) ||
-      (hasVagueCatchAll && !hasExplicitDir && !hasJumpOrPadMechanic) ||
-      (!hasExplicitDir && !hasJumpOrPadMechanic);
+      hasLazyDelegation ||
+      (hasVagueCatchAll && !hasExplicitDir && !hasJumpOrPadMechanic && !hasGimmickCommand && !hasGoalCommand) ||
+      (!hasExplicitDir && !hasJumpOrPadMechanic && !hasGimmickCommand && !hasGoalCommand);
 
     if (isLazyPrompt) {
       return this.buildLazyBlindPlan(
@@ -439,26 +600,41 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
           hasLazyDelegation,
           hasVagueCatchAll,
           hasSpecificHazard,
-          runStyle
+          runStyle,
+          sensor
         }
       );
     }
 
-    // 3. 정상적인 자연어 지시: 정찰 모션 후 절(Clause) 순서대로 경로 생성!
+    // 3. 정상적인 자연어 지시: 주변 지형 살핀 후 절(Clause) 순서대로 경로 생성!
+    const hazardAlert = sensor.hazards.length > 0 ? ` [위험: ${sensor.hazards[0]}]` : '';
+    const gimmickAlert = sensor.gimmicks.length > 0 ? ` [발견: ${sensor.gimmicks[0]}]` : '';
     maneuvers.push({
       type: 'EMOTE',
       emote: 'LOOK_AROUND',
-      label: '👀 지형 스캔',
-      thought: '어디 보자, 지시받은 순서대로 코스를 확인하는 중! 👀'
+      label: '👀 주변 살피기',
+      thought: `어디 보자... 두리번두리번!${hazardAlert || gimmickAlert || ' 근처 경로 확인 완료!'} 👀`
     });
 
     const rules = {
       isLazy: false,
+      avoidHazard: /(?:가시|뾰족|바늘|찔리|지뢰|폭탄|마인|용암|불|마그마|낭떠러지|함정|위험|조심|피해)/.test(text),
       avoidSpike: /(?:가시|뾰족|바늘|찔리)/.test(text),
+      avoidMine: /(?:지뢰|폭탄|마인)/.test(text),
+      avoidLava: /(?:용암|불구덩이|마그마)/.test(text),
+      avoidIce: /(?:얼음|빙판|미끄러).*?(?:피해|조심|말고|마)/.test(text),
+      useIce:
+        /(?:얼음|빙판|미끄러).*?(?:타고|밟고|이용|미끄러져|통해)/.test(text) ||
+        (/(?:얼음|빙판)/.test(text) && !/(?:피해|말고|조심)/.test(text)),
       jumpSpike: hasJumpOrPadMechanic,
+      jumpHazard: hasJumpOrPadMechanic,
       avoidWall: true,
       useJumpPad: /(?:점프대|발판|파란|스프링|트램펄린)/.test(text),
-      runStyle
+      usePortal: /(?:포탈|워프|순간이동|웜홀|차원문)/.test(text),
+      useConveyor: /(?:컨베이어|벨트).*?(?:타고|밟고|이용)/.test(text),
+      avoidConveyor: /(?:컨베이어|벨트).*?(?:피해|조심)/.test(text),
+      runStyle,
+      sensor
     };
 
     const { clauseManeuvers, clauseThoughts } = this.buildClauseByClauseTrajectory(
@@ -505,10 +681,18 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
 
     if (flags.hasLazyDelegation) {
       thoughts.push('잠깐, 나보고 "알아서" 가라고?! 난 길치 로봇인데! 🤖💦');
-      thoughts.push('어느 쪽으로 돌지, 어디서 점프할지 안 알려주면 앞만 보고 달릴 수밖에 없어!');
+      if (flags.sensor?.hazards?.length > 0) {
+        thoughts.push(`근처에 [${flags.sensor.hazards[0]}] 위험물이 떡하니 보이는데 어딜 어떻게 피하라는 거야?! 😱`);
+      } else {
+        thoughts.push('어느 쪽으로 돌지, 어디서 점프할지 안 알려주면 앞만 보고 달릴 수밖에 없어!');
+      }
     } else if (flags.hasVagueCatchAll) {
       thoughts.push('"다 피해서 안전하게"라고만 하면 어딜 어떻게 피하라는 거야?! 😵');
-      thoughts.push('가시를 뛰어넘을지, 오른쪽이나 아래로 돌지 구체적으로 말해줘야지!');
+      if (flags.sensor?.hazards?.length > 0) {
+        thoughts.push(`근처에 [${flags.sensor.hazards[0]}] 위험물이 있는데 점프를 할지 돌아서 갈지 구체적으로 말해줘!`);
+      } else {
+        thoughts.push('가시나 지뢰를 뛰어넘을지, 오른쪽이나 아래로 돌지 구체적으로 말해줘야지!');
+      }
     } else if (flags.hasSpecificHazard) {
       thoughts.push('위험물을 조심하라고는 했는데… 점프를 할지 어느 방향으로 돌지 안 알려줬네? 🤔');
       thoughts.push('일단 눈앞만 살짝 비켜서 내 맘대로 직진해볼게! 💦');
@@ -521,12 +705,12 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
     const dir = DIRS[robotState.dir ?? 0] || DIRS[0];
     const blindPoints = [];
 
-    // 만약 가시만 언급하고 방향/점프를 전혀 안 알려준 경우:
-    // 첫 번째 가시만 옆으로 1칸 피하는 척하다가 그대로 직진해서 다음 장애물에 걸리거나 멈춤!
+    // 만약 위험물(가시/지뢰/용암)만 언급하고 구체적 경로를 안 알려준 경우:
+    // 첫 번째 장애물만 옆으로 1칸 피하는 척하다가 그대로 직진해서 다음 장애물에 걸리거나 멈춤!
     if (flags.hasSpecificHazard && !flags.hasLazyDelegation && !flags.hasVagueCatchAll) {
       const nextTile = getTile(curX + dir.dx, curZ + dir.dz);
-      if (nextTile === 3) {
-        // 오른쪽으로 살짝 비켜서 앞으로 직진 (결국 아래쪽 다른 가시나 벽에 막힘)
+      if (nextTile === 3 || nextTile === 11 || nextTile === 4) {
+        // 오른쪽으로 살짝 비켜서 앞으로 직진
         const sideX = Math.min(size - 2, curX + 2);
         for (let x = curX + 1; x <= sideX; x++) {
           blindPoints.push({ x, z: curZ });
@@ -663,6 +847,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
     let curZ = robotState.z;
     let curDir = robotState.dir ?? 0;
     let justUsedJumpPad = false;
+    let prevContext = { wasForward: false, lastDir: curDir, lastPerspective: null };
 
     const clauseManeuvers = [];
     const clauseThoughts = [];
@@ -671,15 +856,25 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
       const clause = clauses[i];
       const nextClause = clauses[i + 1] || '';
 
-      const explicitDir = this.extractDirectionFromClause(clause);
-      const nextExplicitDir = this.extractDirectionFromClause(nextClause);
+      const dirResolution = this.resolveClauseDirection(clause, curDir, prevContext);
+      const explicitDir = dirResolution ? dirResolution.dir : null;
+
+      const nextDirRes = this.resolveClauseDirection(
+        nextClause,
+        explicitDir ?? curDir,
+        { wasForward: Boolean(explicitDir !== null || /(?:직진|앞으로|전진)/.test(clause)) }
+      );
+      const nextExplicitDir = nextDirRes ? nextDirRes.dir : null;
 
       const isPadClause = /(?:점프대|발판|파란|스프링|트램펄린)/.test(clause);
       const isJumpClause =
         !isPadClause && /(?:점프|뛰어|폴짝|넘어|날아|도약|jump)/.test(clause);
       const isGoalClause = /(?:보석|목적지|골인|끝까지)/.test(clause);
+      const clauseAvoidHazard =
+        /(?:가시|뾰족|바늘|지뢰|폭탄|마인|용암|불|마그마|낭떠러지|함정|위험|조심|피해)/.test(clause) ||
+        rules.avoidHazard;
       const clauseAvoidSpike =
-        /(?:가시|뾰족|바늘)/.test(clause) || rules.avoidSpike;
+        clauseAvoidHazard || /(?:가시|뾰족|바늘)/.test(clause) || rules.avoidSpike;
 
       // 1) 파란 점프대(5) 진입 및 도약 절
       if (isPadClause) {
@@ -715,7 +910,22 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
         }
       }
 
-      // 2) 장애물(가시/용암) 점프 도약 절
+      // 1-3) 얼음판(6) 기믹 활용 절 (예: "얼음판 타고", "미끄러져서", "빙판 건너")
+      const isIceClause =
+        /(?:얼음|빙판|미끄러).*?(?:타|밟|미끄러져|통해)/.test(clause) ||
+        (/(?:얼음|빙판)/.test(clause) && !/(?:피해|말고|조심)/.test(clause));
+      if (isIceClause && !isJumpClause) {
+        const icePlan = this.planIceSegment(mapInfo, curX, curZ, curDir, rules.runStyle);
+        if (icePlan) {
+          clauseManeuvers.push(...icePlan.maneuvers);
+          clauseThoughts.push('미끄러운 얼음판을 밟고 빠르게 미끄러져 전진! 🧊💨');
+          curX = icePlan.endX;
+          curZ = icePlan.endZ;
+          continue;
+        }
+      }
+
+      // 2) 장애물(가시/용암/지뢰/낭떠러지) 점프 도약 절
       if (isJumpClause) {
         // 직전 절에서 이미 점프대로 용암을 건넜는데 "용암을 뛰어넘어서"가 이어진 경우 중복 도약 방지
         if (justUsedJumpPad && /(?:용암|불|구멍|건너)/.test(clause)) {
@@ -730,9 +940,12 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
           const d = DIRS[curDir];
           const tile1 = getTile(curX + d.dx, curZ + d.dz);
           const tile2 = getTile(curX + d.dx * 2, curZ + d.dz * 2);
+          const tile3 = getTile(curX + d.dx * 3, curZ + d.dz * 3);
 
-          // 만약 1칸 앞은 일반 바닥(1)이고 2칸 앞이 가시(3)라면 1칸 먼저 접근 후 도약
-          if (tile1 === 1 && (tile2 === 3 || tile2 === 4 || tile2 === 0)) {
+          const isHaz = (t) => t === 0 || t === 3 || t === 4 || t === 11;
+
+          // 2칸 센서 분석: 만약 1칸 앞은 디딜 수 있는 안전 바닥이고 2칸 앞이 위험물이라면 1칸 먼저 접근 후 도약
+          if (!isHaz(tile1) && tile1 !== 2 && isHaz(tile2)) {
             curX += d.dx;
             curZ += d.dz;
             clauseManeuvers.push({
@@ -740,31 +953,48 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
               points: [{ x: curX, z: curZ }],
               style: rules.runStyle,
               label: '🏃 도약 지점 접근',
-              thought: '장애물 바로 앞까지 도움닫기로 다가간다! 🏃'
+              thought: '장애물 1칸 앞까지 도움닫기로 다가간다! 🏃'
             });
           }
 
+          const targetHaz = isHaz(tile1) ? tile1 : tile2;
+          const hazName =
+            targetHaz === 11
+              ? '지뢰'
+              : targetHaz === 4
+              ? '용암'
+              : targetHaz === 0
+              ? '낭떠러지'
+              : '가시밭';
+
           const numMatch = clause.match(/(\d+)\s*칸/);
           let jumpDist = numMatch ? Math.min(3, Math.max(2, parseInt(numMatch[1], 10))) : 2;
-          if (
-            !numMatch &&
-            getTile(curX + d.dx * 2, curZ + d.dz * 2) === 3 &&
-            getTile(curX + d.dx * 3, curZ + d.dz * 3) === 1
-          ) {
+          if (!numMatch && isHaz(getTile(curX + d.dx * 2, curZ + d.dz * 2)) && !isHaz(tile3)) {
             jumpDist = 3;
           }
 
-          const landX = Math.max(0, Math.min(size - 1, curX + d.dx * jumpDist));
-          const landZ = Math.max(0, Math.min(size - 1, curZ + d.dz * jumpDist));
+          let landX = Math.max(0, Math.min(size - 1, curX + d.dx * jumpDist));
+          let landZ = Math.max(0, Math.min(size - 1, curZ + d.dz * jumpDist));
+
+          // 지능형 착지 보정: 2칸 착지 지점이 위험물이거나 벽이고 3칸 앞이 안전하면 3칸 도약으로 자동 연장!
+          if (!numMatch && (isHaz(getTile(landX, landZ)) || getTile(landX, landZ) === 2)) {
+            const alt3X = Math.max(0, Math.min(size - 1, curX + d.dx * 3));
+            const alt3Z = Math.max(0, Math.min(size - 1, curZ + d.dz * 3));
+            if (!isHaz(getTile(alt3X, alt3Z)) && getTile(alt3X, alt3Z) !== 2) {
+              jumpDist = 3;
+              landX = alt3X;
+              landZ = alt3Z;
+            }
+          }
 
           clauseManeuvers.push({
             type: 'LEAP',
             target: { x: landX, z: landZ },
             jumpHeight: 0.95,
             label: `🦘 ${jumpDist}칸 공중 도약`,
-            thought: '앞의 가시밭을 힘차게 점프해서 단숨에 뛰어넘는다! 🦘✨'
+            thought: `앞의 ${hazName}을(를) 힘차게 점프해서 단숨에 뛰어넘는다! 🦘✨`
           });
-          clauseThoughts.push(`${ i + 1 }단계: 위험 구간을 점프로 뛰어넘기! 🦘`);
+          clauseThoughts.push(`${i + 1}단계: 바로 앞 위험 구간(${hazName})을 점프로 뛰어넘기! 🦘`);
           curX = landX;
           curZ = landZ;
           continue;
@@ -786,6 +1016,8 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
 
         const nextHasGoal = /(?:보석|목적지|골인)/.test(nextClause);
 
+        const stopBeforeObstacle = /(?:벽|장애물|가시|지뢰)\s*(?:닿기\s*전에|앞까지|앞에서|보이면|직전에)/.test(clause);
+
         const seg = this.traceDirectionalSegment(
           mapInfo,
           curX,
@@ -794,32 +1026,63 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
           maxSteps,
           {
             avoidSpike: clauseAvoidSpike,
+            avoidHazard: clauseAvoidHazard,
             nextExplicitDir,
             stopAtGoalAxis: nextHasGoal || isGoalClause,
-            hasExplicitTileCount: Boolean(numMatch)
+            hasExplicitTileCount: Boolean(numMatch),
+            stopBeforeObstacle
           }
         );
 
         if (seg.points.length > 0) {
+          const defaultLabel = seg.slidAroundWall
+            ? `🏃 벽 돌아 ${DIRS[curDir].name} 주행`
+            : `🏃 ${DIRS[curDir].name} 연속 주행`;
+          const runLabel = dirResolution?.label || defaultLabel;
+
+          let stepThoughtText = '';
+          let actionThoughtText = '';
+
+          if (dirResolution?.perspective === 'robot') {
+            stepThoughtText = seg.slidAroundWall
+              ? `${i + 1}단계: [로봇 시점] ${dirResolution.explanation}으로 벽을 우회 주행! 🤖🧱`
+              : `${i + 1}단계: [로봇 시점] ${dirResolution.explanation}으로 방향 전환 주행! 🤖↪️`;
+            actionThoughtText = seg.slidAroundWall
+              ? `앞에 벽이 있어 내 시선 기준 ${dirResolution.explanation} 옆길로 돌아갈게! 💨`
+              : `내 시선 기준 ${dirResolution.explanation}으로 꺾어서 시원하게 달린다! 🏃💨`;
+          } else if (dirResolution?.perspective === 'screen') {
+            stepThoughtText = seg.slidAroundWall
+              ? `${i + 1}단계: [화면 시점] ${dirResolution.explanation} 방향 벽을 돌아 이동! 🖥️🧱`
+              : `${i + 1}단계: [화면 시점] ${dirResolution.explanation} 방향으로 연속 이동! 🖥️➡️`;
+            actionThoughtText = seg.slidAroundWall
+              ? `화면 기준 ${dirResolution.explanation} 쪽에 벽이 막고 있으니 옆으로 돌게! 💨`
+              : `화면에서 보이는 ${dirResolution.explanation} 방향으로 달려갈게! 🏃💨`;
+          } else {
+            stepThoughtText = seg.slidAroundWall
+              ? `${i + 1}단계: 벽에 막히면 옆길로 자연스럽게 돌아서 ${DIRS[curDir].name} 이동! 🧱`
+              : `${i + 1}단계: ${DIRS[curDir].name} 방향으로 연속 이동! 🏃`;
+            actionThoughtText = seg.slidAroundWall
+              ? '앞에 벽이 막고 있으니 옆 통로로 부드럽게 돌아서 계속 진행할게! 💨'
+              : `지시대로 ${DIRS[curDir].name} 방향으로 매끄럽게 달린다! 🏃💨`;
+          }
+
           clauseManeuvers.push({
             type: 'RUN_PATH',
             points: seg.points,
             style: rules.runStyle,
-            label: seg.slidAroundWall
-              ? `🏃 벽 돌아 ${DIRS[curDir].name} 주행`
-              : `🏃 ${DIRS[curDir].name} 연속 주행`,
-            thought: seg.slidAroundWall
-              ? '앞에 벽이 막고 있으니 옆 통로로 부드럽게 돌아서 계속 진행할게! 💨'
-              : `지시대로 ${DIRS[curDir].name} 방향으로 매끄럽게 달린다! 🏃💨`
+            label: runLabel,
+            thought: actionThoughtText
           });
-          clauseThoughts.push(
-            seg.slidAroundWall
-              ? `${i + 1}단계: 벽에 막히면 옆길로 자연스럽게 돌아서 ${DIRS[curDir].name} 이동! 🧱`
-              : `${i + 1}단계: ${DIRS[curDir].name} 방향으로 연속 이동! 🏃`
-          );
+          clauseThoughts.push(stepThoughtText);
           curX = seg.endX;
           curZ = seg.endZ;
         }
+
+        prevContext = {
+          wasForward: true,
+          lastDir: curDir,
+          lastPerspective: dirResolution?.perspective || 'screen'
+        };
 
         // 만약 같은 절 안에 "오른쪽 보석까지 달려가"처럼 목적지까지 포함됐고 아직 골인이 아니면 이어서 골인 직진
         if (isGoalClause && (curX !== goal.x || curZ !== goal.z)) {
@@ -828,7 +1091,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
             curX,
             curZ,
             curDir,
-            clauseAvoidSpike
+            clauseAvoidHazard || clauseAvoidSpike
           );
           if (goalSeg.points.length > 0) {
             clauseManeuvers.push({
@@ -853,7 +1116,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
             curX,
             curZ,
             curDir,
-            clauseAvoidSpike
+            clauseAvoidHazard || clauseAvoidSpike
           );
           if (goalSeg.points.length > 0) {
             clauseManeuvers.push({
@@ -878,6 +1141,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
             maxSteps,
             {
               avoidSpike: clauseAvoidSpike,
+              avoidHazard: clauseAvoidHazard,
               nextExplicitDir,
               stopAtGoalAxis: false,
               hasExplicitTileCount: Boolean(numMatch)
@@ -895,6 +1159,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
             curX = seg.endX;
             curZ = seg.endZ;
           }
+          prevContext = { wasForward: true, lastDir: curDir, lastPerspective: 'robot' };
         }
       }
     }
@@ -902,13 +1167,188 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
     return { clauseManeuvers, clauseThoughts };
   }
 
-  extractDirectionFromClause(clause) {
+  /**
+   * 자연어 절(Clause)과 현재 로봇 방향(curDir)을 바탕으로,
+   * 좌표로 고정하지 않고 문맥에 따라 '로봇 기준(상대 회전)'인지 '화면 기준'인지 동적으로 판단합니다.
+   *
+   * @param {string} clause - 자연어 절 (예: "오른쪽으로 돌아", "화면 위로", "우회전해서")
+   * @param {number} curDir - 로봇의 현재 시선 방향 인덱스 (0~3)
+   * @param {object} prevContext - 직전 절 문맥 ({ wasForward: boolean, lastDir: number, lastPerspective: string })
+   * @returns {object|null} { dir, perspective, actionType, label, explanation }
+   */
+  resolveClauseDirection(clause, curDir = 0, prevContext = {}) {
     if (!clause) return null;
-    if (/(?:오른쪽|우측|동쪽|오른편)/.test(clause)) return 1; // +X
-    if (/(?:왼쪽|좌측|서쪽|왼편)/.test(clause)) return 3; // -X
-    if (/(?:아래|남쪽|내려)/.test(clause)) return 0; // +Z
-    if (/(?:위쪽|위로|북쪽|올라)/.test(clause)) return 2; // -Z
+    const text = clause.toLowerCase().trim();
+
+    // 1) 명시적 로봇 기준 키워드 검출
+    const explicitRobot = /(?:로봇|너|자신|본인|내\s*몸|주인공|기체)\s*(?:기준|시점|방향|시선|입장)/.test(text);
+    // 2) 명시적 화면/플레이어 기준 키워드 검출
+    const explicitScreen = /(?:화면|내\s*기준|보는\s*기준|모니터|카메라|시점|유저|플레이어)\s*(?:기준|시점|방향)/.test(text);
+
+    // 3) 회전 동사 검출 ("돌아", "돌아서", "꺾어", "꺾어서", "틀어", "틀어서", "우회전", "좌회전", "유턴")
+    const hasTurnVerb = /(?:돌아|돌아서|돌고|꺾어|꺾어서|꺾고|틀어|틀어서|틀고|우회전|좌회전|유턴)/.test(text);
+
+    // 4) 직진/앞/뒤/후진 검출
+    const isForward = /(?:앞으로|직진|전진|바라보는|보던\s*방향|정면)/.test(text);
+    const isBackward = /(?:뒤로|후진|퇴각|뒤돌|유턴|뒤쪽)/.test(text);
+
+    // 5) 대각선 (화면 아이소메트릭 사분면 명시)
+    if (/(?:우상단|우측\s*상단|오른쪽\s*위)/.test(text)) {
+      return {
+        dir: 2, // 북(-Z)
+        perspective: 'screen',
+        actionType: 'screen_diag',
+        label: '↗️ 화면 우상단(북쪽) 이동',
+        explanation: '화면 우상단(북쪽, -Z)'
+      };
+    }
+    if (/(?:우하단|우측\s*하단|오른쪽\s*아래)/.test(text)) {
+      return {
+        dir: 1, // 동(+X)
+        perspective: 'screen',
+        actionType: 'screen_diag',
+        label: '↘️ 화면 우하단(동쪽) 이동',
+        explanation: '화면 우하단(동쪽, +X)'
+      };
+    }
+    if (/(?:좌상단|좌측\s*상단|왼쪽\s*위)/.test(text)) {
+      return {
+        dir: 3, // 서(-X)
+        perspective: 'screen',
+        actionType: 'screen_diag',
+        label: '↖️ 화면 좌상단(서쪽) 이동',
+        explanation: '화면 좌상단(서쪽, -X)'
+      };
+    }
+    if (/(?:좌하단|좌측\s*하단|왼쪽\s*아래)/.test(text)) {
+      return {
+        dir: 0, // 남(+Z)
+        perspective: 'screen',
+        actionType: 'screen_diag',
+        label: '↙️ 화면 좌하단(남쪽) 이동',
+        explanation: '화면 좌하단(남쪽, +Z)'
+      };
+    }
+
+    // 6) 절대 방위 (동/서/남/북)
+    if (/(?:동쪽|동편)/.test(text)) {
+      return { dir: 1, perspective: 'compass', actionType: 'compass', label: '🧭 동쪽(+X) 이동', explanation: '절대 방위 동쪽(+X)' };
+    }
+    if (/(?:서쪽|서편)/.test(text)) {
+      return { dir: 3, perspective: 'compass', actionType: 'compass', label: '🧭 서쪽(-X) 이동', explanation: '절대 방위 서쪽(-X)' };
+    }
+    if (/(?:남쪽|남편)/.test(text)) {
+      return { dir: 0, perspective: 'compass', actionType: 'compass', label: '🧭 남쪽(+Z) 이동', explanation: '절대 방위 남쪽(+Z)' };
+    }
+    if (/(?:북쪽|북편)/.test(text)) {
+      return { dir: 2, perspective: 'compass', actionType: 'compass', label: '🧭 북쪽(-Z) 이동', explanation: '절대 방위 북쪽(-Z)' };
+    }
+
+    // 7) 전진 / 후진 처리
+    if (isForward && !/(?:오른쪽|우측|왼쪽|좌측|위|아래)/.test(text)) {
+      return {
+        dir: curDir,
+        perspective: 'robot',
+        actionType: 'forward',
+        label: '⬆️ 정면 직진 주행',
+        explanation: `현재 시선 앞쪽(${DIRS[curDir]?.shortName || DIRS[curDir]?.name})`
+      };
+    }
+    if (isBackward) {
+      const backDir = (curDir + 2) % 4;
+      return {
+        dir: backDir,
+        perspective: 'robot',
+        actionType: 'backward',
+        label: '🔄 180도 뒤돌아 주행',
+        explanation: `뒤로 180도 돌아서 ${DIRS[backDir]?.shortName || DIRS[backDir]?.name}`
+      };
+    }
+
+    // 8) 오른쪽 / 왼쪽 판단 (핵심: 로봇 기준 vs 화면 기준 동적 분기)
+    const hasRight = /(?:오른쪽|우측|오른편|우회전)/.test(text);
+    const hasLeft = /(?:왼쪽|좌측|왼편|좌회전)/.test(text);
+
+    if (hasRight || hasLeft) {
+      // 로봇 기준으로 판단하는 조건:
+      // 1. "로봇 기준", "너 기준", "내 몸 기준" 등 명시
+      // 2. "우회전", "좌회전" 단어 사용
+      // 3. "돌아", "돌아서", "꺾어", "꺾어서", "틀어", "틀어서" 등 회전 동작 동사 포함
+      // 4. "화면 기준"이 아니고 직전 절이 직진/전진이었을 때
+      const isRobotRelative =
+        explicitRobot ||
+        hasTurnVerb ||
+        /(?:우회전|좌회전)/.test(text) ||
+        (!explicitScreen && prevContext.wasForward);
+
+      if (isRobotRelative) {
+        if (hasRight) {
+          const targetDir = (curDir + 1) % 4;
+          return {
+            dir: targetDir,
+            perspective: 'robot',
+            actionType: 'turn_right',
+            label: `↪️ [로봇 우회전] ${DIRS[targetDir]?.shortName || DIRS[targetDir]?.name}`,
+            explanation: `현재 시선(${DIRS[curDir]?.shortName || DIRS[curDir]?.name}) 기준 오른쪽(우회전)인 ${DIRS[targetDir]?.shortName || DIRS[targetDir]?.name}`
+          };
+        } else {
+          const targetDir = (curDir + 3) % 4;
+          return {
+            dir: targetDir,
+            perspective: 'robot',
+            actionType: 'turn_left',
+            label: `↩️ [로봇 좌회전] ${DIRS[targetDir]?.shortName || DIRS[targetDir]?.name}`,
+            explanation: `현재 시선(${DIRS[curDir]?.shortName || DIRS[curDir]?.name}) 기준 왼쪽(좌회전)인 ${DIRS[targetDir]?.shortName || DIRS[targetDir]?.name}`
+          };
+        }
+      } else {
+        // 화면/좌표 기준
+        if (hasRight) {
+          return {
+            dir: 1, // 동(+X)
+            perspective: 'screen',
+            actionType: 'screen_right',
+            label: '➡️ [화면 시점] 오른쪽 주행',
+            explanation: '화면 오른쪽(동쪽, +X)'
+          };
+        } else {
+          return {
+            dir: 3, // 서(-X)
+            perspective: 'screen',
+            actionType: 'screen_left',
+            label: '⬅️ [화면 시점] 왼쪽 주행',
+            explanation: '화면 왼쪽(서쪽, -X)'
+          };
+        }
+      }
+    }
+
+    // 9) 위 / 아래 판단 (화면/맵 수직 축)
+    if (/(?:위쪽|위로|올라|북쪽)/.test(text)) {
+      return {
+        dir: 2, // 북(-Z)
+        perspective: 'screen',
+        actionType: 'screen_up',
+        label: '⬆️ [화면 시점] 위쪽 주행',
+        explanation: '화면 위쪽(북쪽, -Z)'
+      };
+    }
+    if (/(?:아래|아래쪽|내려|남쪽)/.test(text)) {
+      return {
+        dir: 0, // 남(+Z)
+        perspective: 'screen',
+        actionType: 'screen_down',
+        label: '⬇️ [화면 시점] 아래쪽 주행',
+        explanation: '화면 아래쪽(남쪽, +Z)'
+      };
+    }
+
     return null;
+  }
+
+  extractDirectionFromClause(clause, curDir = 0, prevContext = {}) {
+    const res = this.resolveClauseDirection(clause, curDir, prevContext);
+    return res ? res.dir : null;
   }
 
   /**
@@ -1071,9 +1511,95 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
   }
 
   /**
+   * 미끄러운 얼음판(6)까지 접근한 뒤 가던 방향으로 1칸 추가 미끄러지는 기동 생성
+   */
+  planIceSegment(mapInfo, startX, startZ, curDir, runStyle) {
+    const { size, grid } = mapInfo;
+    const getTile = (x, z) => {
+      if (x < 0 || x >= size || z < 0 || z >= size) return 0;
+      return grid[z][x];
+    };
+
+    // 현재 위치 주변 2칸 내 또는 맵 내 가장 가까운 얼음판(6) 찾기
+    const ices = [];
+    for (let z = 0; z < size; z++) {
+      for (let x = 0; x < size; x++) {
+        if (grid[z][x] === 6) {
+          ices.push({ x, z, dist: Math.hypot(x - startX, z - startZ) });
+        }
+      }
+    }
+    if (ices.length === 0) return null;
+
+    ices.sort((a, b) => a.dist - b.dist);
+    const targetIce = ices[0];
+
+    const approachPoints = [];
+    let cx = startX;
+    let cz = startZ;
+
+    while (cx !== targetIce.x || cz !== targetIce.z) {
+      if (cx !== targetIce.x) {
+        cx += Math.sign(targetIce.x - cx);
+      } else if (cz !== targetIce.z) {
+        cz += Math.sign(targetIce.z - cz);
+      }
+      approachPoints.push({ x: cx, z: cz });
+      if (approachPoints.length > size * 2) break;
+    }
+
+    // 얼음판에 도달한 후, 진입 방향으로 1칸 더 쭈욱 미끄러짐!
+    let slideDir = DIRS[curDir];
+    if (approachPoints.length >= 2) {
+      const prev = approachPoints[approachPoints.length - 2];
+      const dx = targetIce.x - prev.x;
+      const dz = targetIce.z - prev.z;
+      if (dx !== 0 || dz !== 0) {
+        slideDir = { dx: Math.sign(dx), dz: Math.sign(dz) };
+      }
+    }
+
+    const slideX = Math.max(0, Math.min(size - 1, targetIce.x + slideDir.dx));
+    const slideZ = Math.max(0, Math.min(size - 1, targetIce.z + slideDir.dz));
+    const slideTile = getTile(slideX, slideZ);
+
+    const maneuvers = [];
+    if (approachPoints.length > 0) {
+      maneuvers.push({
+        type: 'RUN_PATH',
+        points: approachPoints,
+        style: runStyle,
+        label: '🧊 얼음판 진입',
+        thought: '미끄러운 얼음판 위로 올라탄다! 🧊'
+      });
+    }
+
+    if (slideTile !== 2 && (slideX !== targetIce.x || slideZ !== targetIce.z)) {
+      maneuvers.push({
+        type: 'RUN_PATH',
+        points: [{ x: slideX, z: slideZ }],
+        style: 'dash',
+        label: '🧊 쭈욱 미끄러지기',
+        thought: '얼음판 물리 효과로 가던 방향으로 1칸 쭈욱 미끄러진다! 💨'
+      });
+      return {
+        maneuvers,
+        endX: slideX,
+        endZ: slideZ
+      };
+    }
+
+    return {
+      maneuvers,
+      endX: targetIce.x,
+      endZ: targetIce.z
+    };
+  }
+
+  /**
    * 특정 방향(dirIdx)으로 연속 이동하되,
-   * 진행 방향 바로 앞을 벽(2)이 가로막으면 게임오버되지 않고
-   * 벽 옆(1~2칸)의 열린 통로로 미끄러지듯 돌아서 원래 방향 이동을 이어갑니다!
+   * 진행 방향 바로 앞을 벽(2)이나 위험물(가시/용암/지뢰)이 가로막으면 2칸 센서로 감지하여 안전하게 우회하거나,
+   * 얼음판/컨베이어 기믹에 올라탔을 때 물리 효과를 경로에 정확히 반영합니다.
    */
   traceDirectionalSegment(mapInfo, startX, startZ, dirIdx, maxSteps, opts = {}) {
     const { size, grid, goal } = mapInfo;
@@ -1082,6 +1608,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
       return grid[z][x];
     };
 
+    const isHazard = (t) => t === 0 || t === 3 || t === 4 || t === 11;
     const d = DIRS[dirIdx];
     const points = [];
     let cx = startX;
@@ -1104,9 +1631,15 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
 
       const nextTile = getTile(nx, nz);
 
-      // 1) 앞에 벽(2)이 가로막고 있는 경우!
+      // 조건부 정지 키워드("벽 닿기 전에", "가시 앞까지만" 등) 감지 시 장애물 바로 앞에서 정지
+      if (opts.stopBeforeObstacle) {
+        if (nextTile === 2 || isHazard(nextTile)) {
+          break;
+        }
+      }
+
+      // 1) 앞에 벽(2)이 가로막고 있는 경우: 1~2칸 옆으로 돌아서 전진!
       if (nextTile === 2) {
-        // 만약 이미 이동을 좀 했고, 다음 절에서 꺾을 방향(nextExplicitDir)이 현재 위치에서 열려 있다면 여기서 코너 회전 대기!
         if (stepsTaken > 0 && opts.nextExplicitDir !== null && opts.nextExplicitDir !== undefined) {
           const nd = DIRS[opts.nextExplicitDir];
           const turnTile = getTile(cx + nd.dx, cz + nd.dz);
@@ -1115,13 +1648,12 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
           }
         }
 
-        // 벽에 막혔을 때 옆으로 1~2칸 돌아서 원래 진행 방향(dirIdx)으로 계속 나아갈 수 있는지 탐색
         const slidePts = this.findLocalWallSlide(
           mapInfo,
           cx,
           cz,
           dirIdx,
-          opts.avoidSpike
+          opts.avoidHazard || opts.avoidSpike
         );
         if (slidePts && slidePts.length > 0) {
           slidAroundWall = true;
@@ -1133,32 +1665,99 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
           stepsTaken += 2;
           continue;
         } else {
-          // 더 이상 우회할 곳이 없는 외곽 벽이면 벽 앞까지만 이동
           break;
         }
       }
 
-      // 2) 앞에 가시(3)가 있는 경우: 가시 회피를 지시받았으면 옆으로 1칸 곡선 회피!
-      if (nextTile === 3 && opts.avoidSpike) {
-        const spikeDetour = this.findLocalSpikeSidestep(mapInfo, cx, cz, dirIdx);
-        if (spikeDetour && spikeDetour.length > 0) {
-          for (const pt of spikeDetour) {
+      // 2) 앞에 위험물(가시 3, 용암 4, 지뢰 11, 낭떠러지 0)이 있는 경우:
+      // 회피 지시(avoidHazard / avoidSpike)가 있으면 센서로 감지하고 옆으로 안전하게 1칸 곡선 우회!
+      if (isHazard(nextTile) && (opts.avoidHazard || opts.avoidSpike)) {
+        const hazardDetour = this.findLocalHazardSidestep(mapInfo, cx, cz, dirIdx);
+        if (hazardDetour && hazardDetour.length > 0) {
+          for (const pt of hazardDetour) {
             points.push(pt);
             cx = pt.x;
             cz = pt.z;
           }
           stepsTaken += 2;
           continue;
+        } else {
+          // 우회로가 없는 경우 위험물 바로 앞에서 정지
+          break;
         }
       }
 
-      // 3) 일반 이동 (가시/용암 회피 지시가 없으면 그대로 밟고 사고 발생!)
+      // 3) 2칸 앞 위험물 사전 감지:
+      // 유저가 구체적 칸 수를 말하지 않았고, 1칸 앞은 안전하지만 2칸 앞이 위험물인 경우 위험물 1칸 앞까지만 가고 대기
+      if (!opts.hasExplicitTileCount && stepsTaken > 0) {
+        const tileAhead2 = getTile(nx + d.dx, nz + d.dz);
+        if (isHazard(tileAhead2) && (opts.avoidHazard || opts.avoidSpike)) {
+          cx = nx;
+          cz = nz;
+          points.push({ x: cx, z: cz });
+          stepsTaken++;
+          break;
+        }
+      }
+
+      // 4) 🧊 얼음판(6) 기믹 처리: 밟으면 이동 방향으로 1칸 더 쭈욱 미끄러짐!
+      if (nextTile === 6) {
+        cx = nx;
+        cz = nz;
+        points.push({ x: cx, z: cz });
+        stepsTaken++;
+
+        const slideX = cx + d.dx;
+        const slideZ = cz + d.dz;
+        const slideTile = getTile(slideX, slideZ);
+        if (slideTile !== 2 && slideX >= 0 && slideX < size && slideZ >= 0 && slideZ < size) {
+          // 지능형 얼음판 생존: 미끄러져 들어간 곳이 위험물이고 회피 지시가 있으면 얼음판 위에서 감속 정지!
+          if (isHazard(slideTile) && (opts.avoidHazard || opts.avoidSpike)) {
+            break;
+          }
+          cx = slideX;
+          cz = slideZ;
+          points.push({ x: cx, z: cz });
+          stepsTaken++;
+          if (isHazard(slideTile) || slideTile === 9) {
+            break;
+          }
+        }
+        continue;
+      }
+
+      // 5) ⏩ 컨베이어 벨트(8) 기믹 처리: 벨트 방향으로 1칸 밀려남!
+      if (nextTile === 8) {
+        cx = nx;
+        cz = nz;
+        points.push({ x: cx, z: cz });
+        stepsTaken++;
+
+        const conveyors = mapInfo.conveyors || [];
+        const cCfg = conveyors.find((c) => c.x === cx && c.z === cz);
+        const cDir = cCfg?.dir || { dx: 1, dz: 0 };
+        const pushX = cx + cDir.dx;
+        const pushZ = cz + cDir.dz;
+        const pushTile = getTile(pushX, pushZ);
+        if (pushTile !== 2 && pushX >= 0 && pushX < size && pushZ >= 0 && pushZ < size) {
+          cx = pushX;
+          cz = pushZ;
+          points.push({ x: cx, z: cz });
+          stepsTaken++;
+          if (isHazard(pushTile) || pushTile === 9) {
+            break;
+          }
+        }
+        continue;
+      }
+
+      // 6) 일반 바닥 이동
       cx = nx;
       cz = nz;
       points.push({ x: cx, z: cz });
       stepsTaken++;
 
-      if (nextTile === 3 || nextTile === 4 || nextTile === 0 || nextTile === 9) {
+      if (isHazard(nextTile) || nextTile === 9) {
         break;
       }
     }
@@ -1173,9 +1772,9 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
 
   /**
    * 진행 방향(dirIdx) 바로 앞이 벽(2)일 때,
-   * 좌/우 1~2칸 옆으로 비켜서 벽 너머로 전진하는 로컬 우회 경로를 찾습니다. (맵 전체 길찾기 아님!)
+   * 좌/우 1~2칸 옆으로 비켜서 벽 너머로 전진하는 로컬 우회 경로를 찾습니다.
    */
-  findLocalWallSlide(mapInfo, cx, cz, dirIdx, avoidSpike = false) {
+  findLocalWallSlide(mapInfo, cx, cz, dirIdx, avoidHazard = false) {
     const { size, grid, goal } = mapInfo;
     const getTile = (x, z) => {
       if (x < 0 || x >= size || z < 0 || z >= size) return 0;
@@ -1185,7 +1784,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
     const isSafePass = (x, z) => {
       const t = getTile(x, z);
       if (t === 0 || t === 2 || t === 4 || t === 11) return false;
-      if (t === 3 && avoidSpike) return false;
+      if (t === 3 && avoidHazard) return false;
       return true;
     };
 
@@ -1195,7 +1794,6 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
       { px: d.dz, pz: -d.dx }
     ];
 
-    // 골인 지점과 가까운 쪽 또는 더 짧은 우회로를 우선 탐색
     let bestPath = null;
     let bestScore = Infinity;
 
@@ -1222,7 +1820,6 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
         const pass2 = { x: pass1.x + d.dx, z: pass1.z + d.dz };
         if (isSafePass(pass2.x, pass2.z)) {
           candidate.push(pass2);
-          // 벽을 완전히 지나쳤다면 원래 라인 쪽으로 1칸 복귀 가능한지 확인
           const back = { x: pass2.x - px, z: pass2.z - pz };
           if (isSafePass(back.x, back.z)) {
             candidate.push(back);
@@ -1245,9 +1842,10 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
   }
 
   /**
-   * 진행 방향 바로 앞 칸이 가시(3)일 때 옆으로 1칸 비켜서 지나가는 로컬 곡선 경로
+   * 진행 방향 바로 앞 칸이 위험물(가시 3, 용암 4, 지뢰 11, 낭떠러지 0)일 때
+   * 좌우 2칸 센서로 안전한 바닥을 찾아 옆으로 1칸 비켜서 지나가는 로컬 곡선 경로
    */
-  findLocalSpikeSidestep(mapInfo, cx, cz, dirIdx) {
+  findLocalHazardSidestep(mapInfo, cx, cz, dirIdx) {
     const { size, grid, goal } = mapInfo;
     const getTile = (x, z) => {
       if (x < 0 || x >= size || z < 0 || z >= size) return 0;
@@ -1255,7 +1853,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
     };
     const isSafe = (x, z) => {
       const t = getTile(x, z);
-      return t === 1 || t === 9;
+      return t === 1 || t === 6 || t === 7 || t === 8 || t === 9 || t === 10;
     };
 
     const d = DIRS[dirIdx];
@@ -1284,6 +1882,11 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
       }
     }
     return null;
+  }
+
+  /** 하위 호환용 alias */
+  findLocalSpikeSidestep(mapInfo, cx, cz, dirIdx) {
+    return this.findLocalHazardSidestep(mapInfo, cx, cz, dirIdx);
   }
 
   /**
@@ -1338,8 +1941,9 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
           continue;
         }
 
-        if (t === 3 && avoidSpike) {
-          const sidestep = this.findLocalSpikeSidestep(mapInfo, cx, cz, cand.dirIdx);
+        const isHaz = (tile) => tile === 0 || tile === 3 || tile === 4 || tile === 11;
+        if (isHaz(t) && avoidSpike) {
+          const sidestep = this.findLocalHazardSidestep(mapInfo, cx, cz, cand.dirIdx);
           if (sidestep && sidestep.length > 0) {
             for (const pt of sidestep) {
               points.push(pt);
