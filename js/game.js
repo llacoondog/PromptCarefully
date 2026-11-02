@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { VoxelMap, MAP_PRESETS, STAGE_KEYS } from './map.js?v=11';
-import { VoxelRobot } from './robot.js?v=11';
-import { RobotAI } from './ai.js?v=11';
-import { MultiplayerManager, PLAYER_COLORS } from './multiplayer.js?v=11';
+import { VoxelMap, MAP_PRESETS, STAGE_KEYS, generateRandomMap, TILE_INFO } from './map.js?v=14';
+import { VoxelRobot } from './robot.js?v=14';
+import { RobotAI } from './ai.js?v=14';
+import { MultiplayerManager, PLAYER_COLORS } from './multiplayer.js?v=14';
+import { soundManager } from './sound.js?v=15';
 
 const BOT_NAMES = ['미니봇', '지나봇', '번개봇', '우당탕봇', '천재봇', '길치봇'];
 const BOT_SAMPLE_PROMPTS = {
@@ -45,6 +46,7 @@ class GameApp {
     this.btnReset = document.getElementById('btn-reset');
     this.btnSettings = document.getElementById('btn-settings');
     this.btnToggleSkin = document.getElementById('btn-toggle-skin');
+    this.btnToggleSound = document.getElementById('btn-toggle-sound');
     this.modalSettings = document.getElementById('settings-modal');
     this.apiKeyInput = document.getElementById('api-key-input');
     this.btnSaveKey = document.getElementById('btn-save-key');
@@ -76,6 +78,7 @@ class GameApp {
     this.joinCodeInput = document.getElementById('join-code-input');
     this.btnJoinRoom = document.getElementById('btn-join-room');
     this.btnSoloPractice = document.getElementById('btn-solo-practice');
+    this.btnSoloRandom = document.getElementById('btn-solo-random');
 
     this.roomTitleText = document.getElementById('room-title-text');
     this.lobbyRoomCode = document.getElementById('lobby-room-code');
@@ -101,6 +104,27 @@ class GameApp {
     this.apiBannerText = document.getElementById('api-banner-text');
     this.btnCloseBanner = document.getElementById('btn-close-banner');
 
+    // 🔍 3D 마우스 호버 인스펙터 엘리먼트
+    this.tileHoverCard = document.getElementById('tile-hover-card');
+    this.hoverTileIcon = document.getElementById('hover-tile-icon');
+    this.hoverTileName = document.getElementById('hover-tile-name');
+    this.hoverTileEn = document.getElementById('hover-tile-en');
+    this.hoverTileBadge = document.getElementById('hover-tile-badge');
+    this.hoverTileDesc = document.getElementById('hover-tile-desc');
+    this.hoverTileTip = document.getElementById('hover-tile-tip');
+    this.hoverTileCoords = document.getElementById('hover-tile-coords');
+
+    // 🎲 랜덤 맵 생성 버튼 및 모드 셀렉트
+    this.btnRandomMap = document.getElementById('btn-random-map');
+    this.btnRandomMapHud = document.getElementById('btn-random-map-hud');
+    this.createMapModeSelect = document.getElementById('create-map-mode');
+    this.roomMapModeSelect = document.getElementById('room-map-mode');
+
+    // 마우스 레이캐스팅 상태
+    this.raycaster = new THREE.Raycaster();
+    this.mouse = new THREE.Vector2(-999, -999);
+    this.activeMapPreset = null;
+
     this.ai = new RobotAI();
     this.currentStageId = 'stage1';
     this.clock = new THREE.Clock();
@@ -115,6 +139,8 @@ class GameApp {
       currentRound: 1,
       maxRounds: 3,
       stageId: 'stage1',
+      mapMode: 'random', // 'random' | 'sequential'
+      customPreset: null,
       timeLeft: 30,
       players: [], // { id, name, pIndex, colorIdx, score, submitted, isBot, roundOutcome, roundDelta }
       spectateTargetId: null
@@ -133,7 +159,7 @@ class GameApp {
       onPacket: (packet) => this.handleNetworkPacket(packet),
       onPlayerLeave: (pid) => this.handlePlayerLeave(pid),
       onHostDisconnected: () => {
-        this.showToast('호스트 연결 종료', '방장과의 연결이 끊어졌어.', true);
+        this.showToast('연결 종료', '방과의 연결이 끊어졌어.', true);
         this.returnToLobbyHome();
       }
     });
@@ -157,8 +183,9 @@ class GameApp {
 
   initThree() {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0f111a);
-    this.scene.fog = new THREE.FogExp2(0x0f111a, 0.04);
+    // 맑고 화사한 파스텔 스카이블루 배경과 부드러운 하늘빛 안개
+    this.scene.background = new THREE.Color(0x7dd3fc);
+    this.scene.fog = new THREE.FogExp2(0xbae6fd, 0.015);
 
     const aspect = window.innerWidth / window.innerHeight;
     const d = 5.5;
@@ -178,11 +205,16 @@ class GameApp {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    // 하늘과 잔디의 싱그러운 반사광 (Hemisphere Light)
+    const hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x86efac, 0.85);
+    this.scene.add(hemiLight);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
     this.scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.set(15, 25, 10);
+    // 따뜻한 햇살 방향광
+    const dirLight = new THREE.DirectionalLight(0xfffaed, 1.35);
+    dirLight.position.set(15, 25, 12);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 1024;
     dirLight.shadow.mapSize.height = 1024;
@@ -195,12 +227,12 @@ class GameApp {
     dirLight.shadow.camera.bottom = -shadowD;
     this.scene.add(dirLight);
 
-    const blueLight = new THREE.PointLight(0x38bdf8, 2, 20);
-    blueLight.position.set(-6, 4, -6);
+    const blueLight = new THREE.PointLight(0x38bdf8, 1.2, 20);
+    blueLight.position.set(-6, 5, -6);
     this.scene.add(blueLight);
 
-    const pinkLight = new THREE.PointLight(0xec4899, 2, 20);
-    pinkLight.position.set(6, 4, 6);
+    const pinkLight = new THREE.PointLight(0xf472b6, 1.2, 20);
+    pinkLight.position.set(6, 5, 6);
     this.scene.add(pinkLight);
   }
 
@@ -209,21 +241,135 @@ class GameApp {
     this.robot = new VoxelRobot(this.scene, this.map);
   }
 
-  loadStage(stageId) {
-    this.currentStageId = stageId;
-    this.map.loadStage(stageId);
-    const preset = MAP_PRESETS[stageId] || MAP_PRESETS.stage1;
+  loadStage(stageIdOrPreset, customPreset = null) {
+    let preset;
+    if (customPreset) {
+      preset = customPreset;
+      this.currentStageId = preset.id || 'custom';
+    } else if (typeof stageIdOrPreset === 'object' && stageIdOrPreset !== null) {
+      preset = stageIdOrPreset;
+      this.currentStageId = preset.id || 'custom';
+    } else if (stageIdOrPreset === 'action_random' || stageIdOrPreset === 'random') {
+      preset = generateRandomMap();
+      this.currentStageId = preset.id;
+    } else {
+      this.currentStageId = stageIdOrPreset || 'stage1';
+      preset = MAP_PRESETS[this.currentStageId] || MAP_PRESETS.stage1;
+    }
+
+    MAP_PRESETS[this.currentStageId] = preset;
+    this.activeMapPreset = preset;
+    this.map.loadStage(preset);
     this.robot.reset(preset.start);
+
     if (this.stageTitleLabel) {
       this.stageTitleLabel.textContent = `🗺️ ${preset.name}`;
     }
     if (this.mapSelect) {
-      this.mapSelect.value = stageId;
+      if (MAP_PRESETS[this.currentStageId] && this.currentStageId.startsWith('stage')) {
+        this.mapSelect.value = this.currentStageId;
+      } else {
+        this.mapSelect.value = 'action_random';
+      }
     }
 
     this.hideSpeechBubble();
     this.hideToast();
     this.clearActionBadges();
+    this.handlePointerLeave();
+  }
+
+  // 🎲 무작위 절차적 맵을 생성하여 즉시 로드하고 게임 화면으로 진입
+  generateAndLoadRandomMap() {
+    // 1. 혹시 로비나 정산 모달에 있었다면 즉시 닫고 연습/플레이 화면 활성화
+    this.isSoloMode = true;
+    this.lobbyOverlay.classList.add('hidden');
+    this.roundSummaryModal.classList.add('hidden');
+    this.spectateBanner.classList.add('hidden');
+    this.scoreboardPanel.classList.add('hidden');
+    this.roomCodePill.classList.add('hidden');
+    this.timerBadge.classList.add('hidden');
+
+    this.hudFooter.classList.remove('hidden');
+    this.mapSelect.classList.remove('hidden');
+    this.btnReset.classList.remove('hidden');
+    this.submissionCounterEl.classList.add('hidden');
+
+    this.roundBadge.textContent = '🎲 랜덤 연습 모드';
+    this.btnSubmitText.textContent = '명령 전송';
+    this.promptInput.disabled = false;
+    this.btnSubmit.disabled = false;
+    this.promptInput.value = '';
+    this.robot.setColorTheme(PLAYER_COLORS[0].body, PLAYER_COLORS[0].accent);
+    this.gameStatusEl.textContent = '랜덤 맵 생성됨 - 작전 대기 중';
+
+    // 2. 새 랜덤 맵 생성 및 로드
+    const newMap = generateRandomMap();
+    MAP_PRESETS[newMap.id] = newMap;
+    this.loadStage(newMap);
+
+    // 호스트인 경우 대기실/룸 상태에 즉시 동기화
+    if (this.net.isHost) {
+      this.roomState.stageId = newMap.id;
+      this.roomState.customPreset = newMap;
+      this.syncRoomStateToAll();
+    }
+
+    soundManager.playPortal();
+    this.showToast('🎲 새로운 랜덤 맵 생성 완료!', `${newMap.name}이(가) 펼쳐졌어! 마우스로 기믹들을 확인해봐.`);
+  }
+
+  // 🔍 3D 캔버스 마우스 호버 인스펙터 이벤트 처리
+  handlePointerMove(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const hit = this.map.raycastTile(this.raycaster);
+
+    if (hit) {
+      this.map.setHoverHighlight(hit.gridX, hit.gridZ);
+
+      const info = hit.info;
+      if (this.hoverTileIcon) this.hoverTileIcon.textContent = info.icon || '📍';
+      if (this.hoverTileName) this.hoverTileName.textContent = info.name || '타일';
+      if (this.hoverTileEn) this.hoverTileEn.textContent = info.enName || '';
+      if (this.hoverTileBadge) {
+        this.hoverTileBadge.textContent = info.badge || '';
+        this.hoverTileBadge.className = `hover-tile-badge ${info.badgeClass || ''}`;
+      }
+      if (this.hoverTileDesc) this.hoverTileDesc.textContent = info.desc || '';
+      if (this.hoverTileTip) this.hoverTileTip.textContent = info.tip ? `💡 팁: ${info.tip}` : '';
+      if (this.hoverTileCoords) this.hoverTileCoords.textContent = `[X: ${hit.gridX}, Z: ${hit.gridZ}]`;
+
+      const cardWidth = 300;
+      const cardHeight = 170;
+      let left = e.clientX + 16;
+      let top = e.clientY + 16;
+
+      if (left + cardWidth > window.innerWidth) {
+        left = e.clientX - cardWidth - 16;
+      }
+      if (top + cardHeight > window.innerHeight) {
+        top = e.clientY - cardHeight - 16;
+      }
+
+      if (this.tileHoverCard) {
+        this.tileHoverCard.style.left = `${Math.max(10, left)}px`;
+        this.tileHoverCard.style.top = `${Math.max(10, top)}px`;
+        this.tileHoverCard.classList.remove('hidden');
+      }
+    } else {
+      this.handlePointerLeave();
+    }
+  }
+
+  handlePointerLeave() {
+    this.map.setHoverHighlight(null, null);
+    if (this.tileHoverCard) {
+      this.tileHoverCard.classList.add('hidden');
+    }
   }
 
   initEventListeners() {
@@ -254,6 +400,11 @@ class GameApp {
         const { roomCode, myId } = await this.net.createRoom(nick);
         this.isSoloMode = false;
         this.roomMaxRoundsSelect.value = String(maxRounds);
+        const chosenMapMode = this.createMapModeSelect?.value || 'random';
+        if (this.roomMapModeSelect) {
+          this.roomMapModeSelect.value = chosenMapMode;
+        }
+
         this.roomState = {
           roomCode,
           hostId: myId,
@@ -261,6 +412,8 @@ class GameApp {
           currentRound: 1,
           maxRounds,
           stageId: 'stage1',
+          mapMode: chosenMapMode,
+          customPreset: null,
           timeLeft: 30,
           players: [
             {
@@ -297,6 +450,13 @@ class GameApp {
     this.btnSoloPractice.addEventListener('click', () => {
       this.startSoloPracticeMode();
     });
+
+    // 🎲 싱글 랜덤 맵 바로 시작
+    if (this.btnSoloRandom) {
+      this.btnSoloRandom.addEventListener('click', () => {
+        this.generateAndLoadRandomMap();
+      });
+    }
 
     // 방 코드 복사
     const copyRoomCode = () => {
@@ -366,16 +526,55 @@ class GameApp {
       }
     });
 
-    // 싱글 연습용 맵 변경 & 초기화
+    // 🔍 3D 캔버스 마우스 호버 인스펙터 이벤트
+    this.canvas.addEventListener('pointermove', (e) => this.handlePointerMove(e));
+    this.canvas.addEventListener('pointerleave', () => this.handlePointerLeave());
+
+    // 🎲 랜덤 맵 생성 버튼
+    if (this.btnRandomMap) {
+      this.btnRandomMap.addEventListener('click', () => this.generateAndLoadRandomMap());
+    }
+    if (this.btnRandomMapHud) {
+      this.btnRandomMapHud.addEventListener('click', () => this.generateAndLoadRandomMap());
+    }
+
+    // 🗺️ 맵 모드 셀렉트 (방 만들기 & 대기실)
+    if (this.createMapModeSelect) {
+      this.createMapModeSelect.addEventListener('change', (e) => {
+        this.roomState.mapMode = e.target.value;
+        if (this.roomMapModeSelect) this.roomMapModeSelect.value = e.target.value;
+      });
+    }
+    if (this.roomMapModeSelect) {
+      this.roomMapModeSelect.addEventListener('change', (e) => {
+        if (!this.net.isHost) return;
+        this.roomState.mapMode = e.target.value;
+        this.syncRoomStateToAll();
+      });
+    }
+
+    // 맵 변경 & 초기화 (싱글/자유 연습 및 호스트)
     this.mapSelect.addEventListener('change', (e) => {
-      if (this.isSoloMode) {
-        this.loadStage(e.target.value);
+      const val = e.target.value;
+      if (val === 'action_random' || val === 'random') {
+        this.generateAndLoadRandomMap();
+      } else {
+        this.loadStage(val);
+        if (this.net.isHost) {
+          this.roomState.stageId = val;
+          this.roomState.customPreset = null;
+          this.syncRoomStateToAll();
+        }
       }
     });
 
     this.btnReset.addEventListener('click', () => {
       if (this.isSoloMode) {
-        this.loadStage(this.currentStageId);
+        if (this.activeMapPreset) {
+          this.loadStage(this.activeMapPreset);
+        } else {
+          this.loadStage(this.currentStageId);
+        }
       }
     });
 
@@ -384,6 +583,19 @@ class GameApp {
     this.promptInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.handlePromptSubmit();
     });
+
+    // BGM & 효과음 토글 버튼
+    if (this.btnToggleSound) {
+      this.btnToggleSound.addEventListener('click', () => {
+        const isPlaying = soundManager.toggleBgm();
+        this.btnToggleSound.textContent = isPlaying ? '🎵 BGM: 켬' : '🎵 BGM: 끔';
+        this.btnToggleSound.style.borderColor = isPlaying ? 'var(--primary-pink)' : '';
+        this.showToast(
+          isPlaying ? '🎵 BGM 재생' : '🔇 BGM 정지',
+          isPlaying ? '신나는 파티 BGM이 켜졌어!' : 'BGM이 꺼졌어 (효과음은 유지돼).'
+        );
+      });
+    }
 
     // 캐릭터 스킨 변경 토글 (미니 SD ↔ 클래식 복셀)
     if (this.btnToggleSkin) {
@@ -438,7 +650,7 @@ class GameApp {
   async handleJoinRoomClick() {
     const code = this.joinCodeInput.value.trim().toUpperCase();
     if (!code) {
-      this.showToast('방 코드 필요', '입장할 4자리 방 코드를 입력해줘!', true);
+      this.showToast('방 코드 필요', '입장할 방 코드를 입력해줘!', true);
       return;
     }
     const nick = this.getAndSaveNickname();
@@ -485,8 +697,8 @@ class GameApp {
 
     const hostPlayer = players[0];
     this.roomTitleText.textContent = hostPlayer
-      ? `${hostPlayer.name}님의 파티 대기실`
-      : '멀티플레이 대기실';
+      ? `${hostPlayer.name}님의 대기실`
+      : '대기실';
 
     this.roomMaxRoundsSelect.value = String(maxRounds);
     this.roomMaxRoundsSelect.disabled = !this.net.isHost;
@@ -494,7 +706,7 @@ class GameApp {
     this.btnStartGame.disabled = !this.net.isHost;
     this.btnStartGame.textContent = this.net.isHost
       ? `🚀 게임 시작 (총 ${maxRounds}라운드)`
-      : '방장이 게임을 시작하길 기다리는 중...';
+      : '게임 시작 대기 중...';
 
     this.lobbyPlayerCount.textContent = String(players.length);
     this.lobbyPlayerList.innerHTML = '';
@@ -661,7 +873,11 @@ class GameApp {
     this.roomCodePill.textContent = `코드: ${this.roomState.roomCode}`;
     this.roomCodePill.classList.remove('hidden');
 
-    if (this.roomState.stageId && this.roomState.stageId !== prevStage) {
+    if (this.roomState.customPreset) {
+      if (!this.activeMapPreset || this.activeMapPreset.id !== this.roomState.customPreset.id) {
+        this.loadStage(this.roomState.customPreset);
+      }
+    } else if (this.roomState.stageId && this.roomState.stageId !== prevStage) {
       this.loadStage(this.roomState.stageId);
     }
 
@@ -695,7 +911,7 @@ class GameApp {
 
       if (isNewInputRound) {
         // 라운드 입력 시작 시 내 로봇 색상 및 입력창 초기화
-        this.loadStage(this.roomState.stageId);
+        this.loadStage(this.roomState.customPreset || this.roomState.stageId);
         const me = this.roomState.players.find((p) => p.id === this.net.myId);
         if (me) {
           const c = PLAYER_COLORS[me.colorIdx % PLAYER_COLORS.length];
@@ -719,7 +935,7 @@ class GameApp {
         this.promptInput.disabled = false;
         this.btnSubmit.disabled = false;
         this.btnSubmitText.textContent = '명령 준비 완료';
-        this.gameStatusEl.textContent = '30초 안에 로봇에게 내릴 명령을 입력해!';
+        this.gameStatusEl.textContent = '로봇에게 내릴 명령을 입력해!';
       }
       return;
     }
@@ -742,8 +958,12 @@ class GameApp {
   }
 
   updateTimerUI(sec) {
+    const prevSec = parseInt(this.timerSecEl.textContent, 10);
     this.timerSecEl.textContent = String(Math.max(0, sec));
     this.timerBadge.classList.toggle('urgent', sec <= 8);
+    if (sec <= 5 && sec > 0 && prevSec !== sec) {
+      soundManager.playTick(true);
+    }
   }
 
   // =========================================================================
@@ -754,6 +974,7 @@ class GameApp {
     if (!this.net.isHost) return;
     const maxR = Math.min(8, Math.max(1, parseInt(this.roomMaxRoundsSelect.value, 10) || 3));
     this.roomState.maxRounds = maxR;
+    this.roomState.mapMode = this.roomMapModeSelect?.value || this.createMapModeSelect?.value || 'random';
     this.roomState.players.forEach((p, idx) => {
       p.pIndex = idx + 1;
       p.score = 0;
@@ -770,7 +991,17 @@ class GameApp {
     this.spectateAbortToken++;
     this.hostSubmissions.clear();
 
-    const stageId = STAGE_KEYS[(roundNum - 1) % STAGE_KEYS.length];
+    let stageId;
+    let customPreset = null;
+    if (this.roomState.mapMode === 'random') {
+      customPreset = generateRandomMap();
+      stageId = customPreset.id;
+      this.roomState.customPreset = customPreset;
+    } else {
+      stageId = STAGE_KEYS[(roundNum - 1) % STAGE_KEYS.length];
+      this.roomState.customPreset = null;
+    }
+
     this.roomState.currentRound = roundNum;
     this.roomState.stageId = stageId;
     this.roomState.phase = 'INPUT';
@@ -834,7 +1065,10 @@ class GameApp {
     this.roomState.phase = 'SPECTATE';
     this.syncRoomStateToAll();
 
-    const preset = MAP_PRESETS[this.roomState.stageId] || MAP_PRESETS.stage1;
+    const preset =
+      this.roomState.customPreset ||
+      MAP_PRESETS[this.roomState.stageId] ||
+      MAP_PRESETS.stage1;
 
     for (let i = 0; i < this.roomState.players.length; i++) {
       if (myToken !== this.spectateAbortToken) return;
@@ -861,6 +1095,7 @@ class GameApp {
         type: 'SPECTATE_RUN',
         _packetId: 'spec_' + Date.now() + '_' + player.id,
         stageId: this.roomState.stageId || this.currentStageId,
+        customPreset: this.roomState.customPreset,
         playerId: player.id,
         pIndex: i + 1,
         playerName: player.name,
@@ -918,10 +1153,14 @@ class GameApp {
     const token = expectedToken !== null ? expectedToken : this.spectateAbortToken;
     const { pIndex, playerName, colorIdx, prompt, plan } = packet;
     const activeStageId = packet.stageId || this.roomState.stageId || this.currentStageId;
-    if (this.currentStageId !== activeStageId) {
+    if (packet.customPreset) {
+      if (!this.activeMapPreset || this.activeMapPreset.id !== packet.customPreset.id) {
+        this.loadStage(packet.customPreset);
+      }
+    } else if (this.currentStageId !== activeStageId) {
       this.loadStage(activeStageId);
     }
-    const preset = MAP_PRESETS[activeStageId] || MAP_PRESETS.stage1;
+    const preset = packet.customPreset || this.activeMapPreset || MAP_PRESETS[activeStageId] || MAP_PRESETS.stage1;
     const colorInfo = PLAYER_COLORS[colorIdx % PLAYER_COLORS.length];
 
     // 상단 관전 배너 표시
@@ -979,6 +1218,10 @@ class GameApp {
     const isGameOver = this.roomState.phase === 'GAME_OVER';
     const winners = this.roomState.players.filter((p) => p.roundOutcome === 'pass');
     const isSoloWin = winners.length === 1;
+
+    if (isGameOver || winners.length > 0) {
+      soundManager.playFanfare();
+    }
 
     this.roundSummaryModal.classList.remove('hidden');
     this.summaryBadge.textContent = isGameOver
@@ -1088,7 +1331,7 @@ class GameApp {
         type: 'SUBMIT_PROMPT',
         prompt
       });
-      this.showToast('명령 준비 완료! ✅', '30초가 끝나거나 모두 제출하면 1P부터 함께 관전해!', false);
+      this.showToast('명령 준비 완료! ✅', '다른 플레이어의 입력을 기다리는 중이야.', false);
       return;
     }
 
@@ -1099,7 +1342,7 @@ class GameApp {
     this.robot.setThinking(true);
 
     try {
-      const preset = MAP_PRESETS[this.currentStageId];
+      const preset = this.activeMapPreset || MAP_PRESETS[this.currentStageId] || MAP_PRESETS.stage1;
       const result = await this.ai.parsePrompt(
         prompt,
         preset,
@@ -1318,7 +1561,7 @@ class GameApp {
 
   clearActionBadges() {
     this.actionBadgesEl.innerHTML =
-      '<span class="badge-empty">30초 입력 시간이 끝나면 1P부터 순서대로 다함께 결과를 관전해!</span>';
+      '<span class="badge-empty">명령을 입력하면 계획이 표시돼.</span>';
   }
 
   escapeHtml(str) {

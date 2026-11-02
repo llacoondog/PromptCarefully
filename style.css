@@ -1,5 +1,5 @@
 :root {
-  --bg-color: #0f111a;
+  --bg-color: #7dd3fc;
   --surface-color: #1a1d2d;
   --surface-border: #2a2e45;
   --primary-blue: #3b82f6;
@@ -774,6 +774,14 @@ select {
   border-top: 1px solid var(--surface-border);
   font-size: 0.84rem;
   color: var(--text-muted);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.solo-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* 대기실 카드 */
@@ -1134,4 +1142,150 @@ select {
 
 .toast-body {
   font-size: 0.85rem;
+}
+
+/* 🔍 3D 마우스 호버 인스펙터 (플로팅 타일/기믹 설명 카드) */
+.tile-hover-card {
+  position: fixed;
+  pointer-events: none;
+  z-index: 70;
+  width: 290px;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 18px rgba(56, 189, 248, 0.2);
+  color: var(--text-main);
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+  transform: translate(0, 0);
+}
+
+.tile-hover-card.hidden {
+  opacity: 0;
+  transform: translateY(8px) scale(0.96);
+  pointer-events: none;
+}
+
+.hover-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.hover-card-icon {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.hover-card-titles {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.hover-tile-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #f8fafc;
+  letter-spacing: -0.3px;
+}
+
+.hover-tile-en {
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.hover-tile-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+/* 기믹 뱃지 상태별 색상 */
+.badge-danger {
+  background: rgba(239, 68, 68, 0.25);
+  border: 1px solid #ef4444;
+  color: #fca5a5;
+}
+
+.badge-safe {
+  background: rgba(16, 185, 129, 0.25);
+  border: 1px solid #10b981;
+  color: #6ee7b7;
+}
+
+.badge-warning {
+  background: rgba(250, 204, 21, 0.25);
+  border: 1px solid #facc15;
+  color: #fde047;
+}
+
+.badge-info {
+  background: rgba(56, 189, 248, 0.25);
+  border: 1px solid #38bdf8;
+  color: #7dd3fc;
+}
+
+.badge-cyan {
+  background: rgba(6, 182, 212, 0.25);
+  border: 1px solid #06b6d4;
+  color: #67e8f9;
+}
+
+.badge-purple {
+  background: rgba(168, 85, 247, 0.25);
+  border: 1px solid #a855f7;
+  color: #d8b4fe;
+}
+
+.badge-orange {
+  background: rgba(249, 115, 22, 0.25);
+  border: 1px solid #f97316;
+  color: #fdba74;
+}
+
+.badge-gold {
+  background: rgba(250, 204, 21, 0.3);
+  border: 1px solid #eab308;
+  color: #fef08a;
+}
+
+.hover-card-body {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+  margin-bottom: 8px;
+}
+
+.hover-card-tip {
+  font-size: 0.78rem;
+  background: rgba(56, 189, 248, 0.1);
+  border-left: 3px solid #38bdf8;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: #bae6fd;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.hover-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.7rem;
+  color: #64748b;
+  padding-top: 4px;
+}
+
+.hover-coords {
+  font-family: monospace;
+  font-weight: 700;
+  color: #94a3b8;
 }

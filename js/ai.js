@@ -623,7 +623,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
     let pendingModifier = '';
 
     const hasActionOrDir = (str) =>
-      /(?:오른쪽|우측|왼쪽|좌측|아래|위쪽|위로|앞으로|직진|점프|뛰어넘|발판|점프대|돌아|꺾어|내려|올라|달려|보석|목적지|골인|\d+\s*칸)/.test(
+      /(?:오른쪽|우측|왼쪽|좌측|아래|위쪽|위로|앞으로|직진|점프|뛰어넘|발판|점프대|얼음|얼음판|미끄러|포탈|워프|순간이동|컨베이어|지뢰|폭탄|돌아|꺾어|내려|올라|달려|보석|목적지|골인|\d+\s*칸)/.test(
         str
       );
 
@@ -698,6 +698,19 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
           curZ = padPlan.endZ;
           curDir = padPlan.endDir;
           justUsedJumpPad = true;
+          continue;
+        }
+      }
+
+      // 1-2) 차원 워프 포탈(7) 진입 절
+      const isPortalClause = /(?:포탈|워프|순간이동|웜홀|차원문)/.test(clause);
+      if (isPortalClause) {
+        const portalPlan = this.planPortalSegment(mapInfo, curX, curZ, rules.runStyle);
+        if (portalPlan) {
+          clauseManeuvers.push(...portalPlan.maneuvers);
+          clauseThoughts.push('신비로운 차원 포탈을 타고 반대편으로 순간이동! 🌀✨');
+          curX = portalPlan.endX;
+          curZ = portalPlan.endZ;
           continue;
         }
       }
@@ -992,6 +1005,72 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
   }
 
   /**
+   * 차원 워프 포탈(7)까지 접근한 뒤 반대편 연결 포탈로 순간이동하는 기동 생성
+   */
+  planPortalSegment(mapInfo, startX, startZ, runStyle) {
+    const { size, grid, portalPairs = [] } = mapInfo;
+
+    // 현재 위치에서 가장 가까운 포탈(7) 찾기
+    const portals = [];
+    for (let z = 0; z < size; z++) {
+      for (let x = 0; x < size; x++) {
+        if (grid[z][x] === 7) {
+          portals.push({ x, z, dist: Math.hypot(x - startX, z - startZ) });
+        }
+      }
+    }
+    if (portals.length === 0) return null;
+
+    portals.sort((a, b) => a.dist - b.dist);
+    const targetPortal = portals[0];
+
+    // 반대편 포탈 찾기
+    let destPortal = null;
+    const pair = portalPairs.find(
+      (p) =>
+        (p.from.x === targetPortal.x && p.from.z === targetPortal.z) ||
+        (p.to.x === targetPortal.x && p.to.z === targetPortal.z)
+    );
+
+    if (pair) {
+      destPortal = pair.from.x === targetPortal.x && pair.from.z === targetPortal.z ? pair.to : pair.from;
+    } else {
+      destPortal = portals.find((p) => p.x !== targetPortal.x || p.z !== targetPortal.z) || targetPortal;
+    }
+
+    const approachPoints = [];
+    let cx = startX;
+    let cz = startZ;
+
+    while (cx !== targetPortal.x || cz !== targetPortal.z) {
+      if (cx !== targetPortal.x) {
+        cx += Math.sign(targetPortal.x - cx);
+      } else if (cz !== targetPortal.z) {
+        cz += Math.sign(targetPortal.z - cz);
+      }
+      approachPoints.push({ x: cx, z: cz });
+      if (approachPoints.length > size * 2) break;
+    }
+
+    const maneuvers = [];
+    if (approachPoints.length > 0) {
+      maneuvers.push({
+        type: 'RUN_PATH',
+        points: approachPoints,
+        style: runStyle,
+        label: '🌀 차원 포탈 접근',
+        thought: '차원 워프 포탈 속으로 뛰어든다! 🌀'
+      });
+    }
+
+    return {
+      maneuvers,
+      endX: destPortal.x,
+      endZ: destPortal.z
+    };
+  }
+
+  /**
    * 특정 방향(dirIdx)으로 연속 이동하되,
    * 진행 방향 바로 앞을 벽(2)이 가로막으면 게임오버되지 않고
    * 벽 옆(1~2칸)의 열린 통로로 미끄러지듯 돌아서 원래 방향 이동을 이어갑니다!
@@ -1105,7 +1184,7 @@ FINAL: (출발 직전 외치는 짧은 한마디!)
 
     const isSafePass = (x, z) => {
       const t = getTile(x, z);
-      if (t === 0 || t === 2 || t === 4) return false;
+      if (t === 0 || t === 2 || t === 4 || t === 11) return false;
       if (t === 3 && avoidSpike) return false;
       return true;
     };

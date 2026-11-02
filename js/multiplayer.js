@@ -72,7 +72,7 @@ export class MultiplayerManager {
   async createRoom(nickname) {
     this.cleanupPeer();
     this.isHost = true;
-    this.myNickname = nickname || '방장';
+    this.myNickname = nickname || '플레이어1';
     this.roomCode = this.generateRoomCode();
 
     const peerId = `${ROOM_PREFIX}${this.roomCode}`;

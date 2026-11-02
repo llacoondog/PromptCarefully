@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { soundManager } from './sound.js?v=15';
 
 // 방향: 0: +Z (남), 1: +X (동), 2: -Z (북), 3: -X (서)
 export const DIRECTIONS = [
@@ -373,6 +374,13 @@ export class VoxelRobot {
       return;
     }
 
+    const curTile = this.map.getTileType(this.gridPos.x, this.gridPos.z);
+    if (curTile === 5) {
+      soundManager.playJumpPad();
+    } else {
+      soundManager.playJump();
+    }
+
     const startYaw = this.group.rotation.y;
     const dist = Math.hypot(dxWorld, dzWorld);
     const duration = Math.max(0.34, Math.min(0.55, dist * 0.22));
@@ -407,6 +415,7 @@ export class VoxelRobot {
           this.syncDirIndexFromYaw(targetYaw);
           this.resetPose();
           this.spawnTrailParticles(5, 0x38bdf8);
+          soundManager.playLand();
           this.gridPos = { x: targetGrid.x, z: targetGrid.z };
           await this.checkTileCollision();
           resolve();
@@ -507,6 +516,7 @@ export class VoxelRobot {
         if (distTraveled - lastParticleDist > 0.65) {
           lastParticleDist = distTraveled;
           this.spawnTrailParticles(style === 'dash' ? 4 : 2, style === 'dash' ? 0x38bdf8 : 0x94a3b8);
+          soundManager.playFootstep();
         }
 
         // 코너를 돌 때 벽 모서리에 닿으면 멈추지 않고 벽을 타고 자연스럽게 미끄러지며 진행!
@@ -534,9 +544,9 @@ export class VoxelRobot {
               resolve();
               return;
             }
-            if (tileType === 3 || tileType === 4) {
+            if (tileType === 3 || tileType === 4 || tileType === 11) {
               this.group.position.set(pos.x, 0, pos.z);
-              this.lastFailReason = tileType === 4 ? 'lava' : 'spike';
+              this.lastFailReason = tileType === 4 ? 'lava' : tileType === 11 ? 'mine' : 'spike';
               this.triggerExplode(this.lastFailReason);
               resolve();
               return;
@@ -630,6 +640,8 @@ export class VoxelRobot {
       style === 'dash' ? 0.17 : style === 'sneak' ? 0.36 : style === 'zigzag' ? 0.3 : 0.24;
     const startTime = performance.now();
 
+    soundManager.playFootstep();
+
     if (style === 'dash') {
       this.spawnTrailParticles(6, 0x38bdf8);
     } else {
@@ -711,6 +723,7 @@ export class VoxelRobot {
     const duration = 0.32;
     const startTime = performance.now();
     this.spawnTrailParticles(6, 0xfacc15);
+    soundManager.playBonk();
 
     return new Promise((resolve) => {
       const animate = (currentTime) => {
@@ -794,6 +807,7 @@ export class VoxelRobot {
     const doTwirl = distance > 1 && Math.random() > 0.35; // 도약 시 신나게 공중 회전이나 만세 포즈!
     const startTime = performance.now();
 
+    soundManager.playJump();
     this.spawnTrailParticles(6, 0xec4899);
 
     return new Promise((resolve) => {
@@ -820,6 +834,7 @@ export class VoxelRobot {
           this.group.position.y = 0;
           this.resetPose();
           this.spawnTrailParticles(4, 0x38bdf8);
+          soundManager.playLand();
           this.gridPos.x = targetGridX;
           this.gridPos.z = targetGridZ;
           await this.checkTileCollision();
@@ -950,29 +965,230 @@ export class VoxelRobot {
     if (tileType === 0) {
       this.lastFailReason = 'cliff';
       this.triggerFall();
+      return;
     } else if (tileType === 2) {
       this.hitWall = true;
       await this.idleWait();
-    } else if (tileType === 3 || tileType === 4) {
-      this.lastFailReason = tileType === 4 ? 'lava' : 'spike';
+      return;
+    } else if (tileType === 3 || tileType === 4 || tileType === 11) {
+      this.lastFailReason = tileType === 4 ? 'lava' : tileType === 11 ? 'mine' : 'spike';
       this.triggerExplode(this.lastFailReason);
+      return;
     } else if (tileType === 5) {
-      // 점프대 위에 멈춘 경우: 다음 기동(LEAP)에서 뛸 수 있도록 대기
+      // 점프대 위에 멈춘 경우
+      return;
+    } else if (tileType === 6) {
+      // 🧊 얼음판: 가던 방향으로 1칸 추가 미끄러짐!
+      await this.handleIceSlide();
+      return;
+    } else if (tileType === 7) {
+      // 🌀 포탈: 연결된 반대편 포탈로 순간이동!
+      await this.handlePortalWarp();
+      return;
+    } else if (tileType === 8) {
+      // ⏩ 컨베이어: 벨트 방향으로 1칸 밀림!
+      await this.handleConveyorPush();
+      return;
+    } else if (tileType === 10) {
+      // 💥 부서지는 바닥: 밟고 지나가면 와르르 무너짐!
+      this.map.crumbleTile(this.gridPos.x, this.gridPos.z);
+      soundManager.playCrumble();
+      this.spawnTrailParticles(6, 0xd97706);
       return;
     } else if (tileType === 9) {
       this.lastFailReason = null;
       this.triggerGoal();
+      return;
     }
+  }
+
+  // 🧊 얼음판 슬라이딩 처리
+  async handleIceSlide() {
+    soundManager.playIceSlide();
+    this.spawnTrailParticles(6, 0x67e8f9);
+
+    const dir = DIRECTIONS[this.dirIndex];
+    const targetX = this.gridPos.x + dir.dx;
+    const targetZ = this.gridPos.z + dir.dz;
+
+    if (this.map.getTileType(targetX, targetZ) === 2) {
+      await this.bonkWall(targetX, targetZ);
+      return;
+    }
+
+    const startPos = this.group.position.clone();
+    const endWorld = this.map.gridToWorld(targetX, targetZ);
+    const duration = 0.18;
+    const startTime = performance.now();
+
+    return new Promise((resolve) => {
+      const animate = async (currentTime) => {
+        const elapsed = (currentTime - startTime) / 1000;
+        const progress = Math.min(elapsed / duration, 1);
+        const ease = 1 - Math.pow(1 - progress, 2);
+
+        this.group.position.x = THREE.MathUtils.lerp(startPos.x, endWorld.x, ease);
+        this.group.position.z = THREE.MathUtils.lerp(startPos.z, endWorld.z, ease);
+        this.bodyGroup.rotation.z = Math.sin(progress * Math.PI) * 0.22;
+
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          this.group.position.x = endWorld.x;
+          this.group.position.z = endWorld.z;
+          this.gridPos.x = targetX;
+          this.gridPos.z = targetZ;
+          this.resetPose();
+          // 미끄러진 후 도착한 새 타일에서 충돌 재검사 (연쇄 반응!)
+          await this.checkTileCollision();
+          resolve();
+        }
+      };
+      requestAnimationFrame(animate);
+    });
+  }
+
+  // 🌀 포탈 순간이동 처리
+  async handlePortalWarp() {
+    soundManager.playPortal();
+    this.spawnTrailParticles(10, 0xc084fc);
+
+    const curX = this.gridPos.x;
+    const curZ = this.gridPos.z;
+    const preset = this.map.currentPreset || {};
+    const portalPairs = preset.portalPairs || [];
+
+    let targetGrid = null;
+    const pair = portalPairs.find(
+      (p) =>
+        (p.from.x === curX && p.from.z === curZ) ||
+        (p.to.x === curX && p.to.z === curZ)
+    );
+
+    if (pair) {
+      targetGrid = pair.from.x === curX && pair.from.z === curZ ? pair.to : pair.from;
+    } else {
+      // 짝이 명시되지 않은 경우 다른 포탈 타일 검색
+      const { size, grid } = preset;
+      if (grid) {
+        for (let z = 0; z < size; z++) {
+          for (let x = 0; x < size; x++) {
+            if (grid[z][x] === 7 && (x !== curX || z !== curZ)) {
+              targetGrid = { x, z };
+              break;
+            }
+          }
+          if (targetGrid) break;
+        }
+      }
+    }
+
+    if (!targetGrid) return;
+
+    // 워프 연출: 작아지며 흡수 ➔ 반대편에서 뿅!
+    const endWorld = this.map.gridToWorld(targetGrid.x, targetGrid.z);
+    const duration = 0.16;
+    const startTime = performance.now();
+
+    return new Promise((resolve) => {
+      const animate = (currentTime) => {
+        const elapsed = (currentTime - startTime) / 1000;
+        const progress = Math.min(elapsed / duration, 1);
+
+        if (progress < 0.5) {
+          const s = 1 - progress * 2;
+          this.group.scale.set(s, s, s);
+          this.group.rotation.y += 0.3;
+        } else {
+          if (this.group.position.x !== endWorld.x) {
+            this.group.position.set(endWorld.x, 0, endWorld.z);
+            this.gridPos.x = targetGrid.x;
+            this.gridPos.z = targetGrid.z;
+            this.spawnTrailParticles(12, 0xc084fc);
+          }
+          const s = (progress - 0.5) * 2;
+          this.group.scale.set(s, s, s);
+        }
+
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          this.group.scale.set(1, 1, 1);
+          this.group.position.set(endWorld.x, 0, endWorld.z);
+          this.gridPos = { x: targetGrid.x, z: targetGrid.z };
+          this.resetPose();
+          resolve();
+        }
+      };
+      requestAnimationFrame(animate);
+    });
+  }
+
+  // ⏩ 컨베이어 벨트 밀림 처리
+  async handleConveyorPush() {
+    soundManager.playConveyor();
+    this.spawnTrailParticles(5, 0xfacc15);
+
+    const preset = this.map.currentPreset || {};
+    const conveyors = preset.conveyors || [];
+    const cCfg = conveyors.find((c) => c.x === this.gridPos.x && c.z === this.gridPos.z);
+    const d = cCfg?.dir || { dx: 1, dz: 0 };
+
+    const targetX = this.gridPos.x + d.dx;
+    const targetZ = this.gridPos.z + d.dz;
+
+    if (this.map.getTileType(targetX, targetZ) === 2) {
+      await this.bonkWall(targetX, targetZ);
+      return;
+    }
+
+    const startPos = this.group.position.clone();
+    const endWorld = this.map.gridToWorld(targetX, targetZ);
+    const duration = 0.2;
+    const startTime = performance.now();
+
+    return new Promise((resolve) => {
+      const animate = async (currentTime) => {
+        const elapsed = (currentTime - startTime) / 1000;
+        const progress = Math.min(elapsed / duration, 1);
+
+        this.group.position.x = THREE.MathUtils.lerp(startPos.x, endWorld.x, progress);
+        this.group.position.z = THREE.MathUtils.lerp(startPos.z, endWorld.z, progress);
+
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          this.group.position.x = endWorld.x;
+          this.group.position.z = endWorld.z;
+          this.gridPos.x = targetX;
+          this.gridPos.z = targetZ;
+          this.resetPose();
+          await this.checkTileCollision();
+          resolve();
+        }
+      };
+      requestAnimationFrame(animate);
+    });
   }
 
   triggerExplode(reason = 'spike') {
     this.isDead = true;
     this.group.visible = false;
 
-    const particleCount = 28;
+    if (reason === 'lava') {
+      soundManager.playLava();
+    } else if (reason === 'mine') {
+      soundManager.playMine();
+    } else {
+      soundManager.playSpike();
+    }
+
+    const particleCount = reason === 'mine' ? 36 : 28;
     const colors =
       reason === 'lava'
         ? [0xf97316, 0xef4444, 0x38bdf8]
+        : reason === 'mine'
+        ? [0xef4444, 0xf97316, 0x1e293b, 0xfacc15]
         : [0x38bdf8, 0xec4899, 0x334155];
     const geo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
 
@@ -985,9 +1201,9 @@ export class VoxelRobot {
       p.position.y += 0.4;
 
       const velocity = new THREE.Vector3(
-        (Math.random() - 0.5) * 4,
+        (Math.random() - 0.5) * (reason === 'mine' ? 5 : 4),
         Math.random() * 5 + 2,
-        (Math.random() - 0.5) * 4
+        (Math.random() - 0.5) * (reason === 'mine' ? 5 : 4)
       );
 
       this.scene.add(p);
@@ -997,6 +1213,7 @@ export class VoxelRobot {
 
   triggerFall() {
     this.isDead = true;
+    soundManager.playFall();
     const startY = this.group.position.y;
     const startTime = performance.now();
 
@@ -1017,6 +1234,7 @@ export class VoxelRobot {
 
   triggerGoal() {
     this.isGoal = true;
+    soundManager.playGoal();
   }
 
   clearParticles() {

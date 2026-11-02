@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Prompt Carefully - 복셀 3D AI 파티 멀티플레이어</title>
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=14">
   <!-- PeerJS (서버리스 WebRTC P2P 멀티플레이어용) -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <!-- Three.js Import Map -->
@@ -22,6 +22,27 @@
     <!-- 3D 캔버스가 마운트되는 영역 -->
     <canvas id="webgl-canvas"></canvas>
 
+    <!-- 🔍 3D 마우스 호버 인스펙터 (타일/기믹 상세 설명 카드) -->
+    <div id="tile-hover-card" class="tile-hover-card hidden">
+      <div class="hover-card-header">
+        <span class="hover-card-icon" id="hover-tile-icon">🧊</span>
+        <div class="hover-card-titles">
+          <strong class="hover-tile-name" id="hover-tile-name">미끄러운 얼음판</strong>
+          <span class="hover-tile-en" id="hover-tile-en">Slippery Ice Tile</span>
+        </div>
+        <span class="hover-tile-badge" id="hover-tile-badge">미끄럼 주의</span>
+      </div>
+      <div class="hover-card-body" id="hover-tile-desc">
+        매끄러운 마법 얼음 바닥입니다! 밟으면 가던 방향으로 1칸 더 쭈욱 미끄러집니다.
+      </div>
+      <div class="hover-card-tip" id="hover-tile-tip">
+        💡 팁: 얼음판 끝에 가시나 낭떠러지가 없는지 계산해서 이동해!
+      </div>
+      <div class="hover-card-footer">
+        <span class="hover-coords" id="hover-tile-coords">[X: 0, Z: 0]</span>
+      </div>
+    </div>
+
     <!-- 상단 게임 HUD -->
     <header class="hud-header">
       <div class="logo-box">
@@ -37,7 +58,9 @@
       </div>
 
       <div class="hud-right-group">
-        <button id="btn-toggle-skin" class="btn-subtle btn-hud" title="캐릭터 외형 변경 (미니 SD ↔ 복셀 로봇)">👧 스킨: 미니 SD</button>
+        <button id="btn-random-map-hud" class="btn-subtle btn-hud" title="새로운 랜덤 맵 즉시 생성">🎲 랜덤 맵 생성</button>
+        <button id="btn-toggle-sound" class="btn-subtle btn-hud" title="배경음악 및 효과음">🎵 BGM: 끔</button>
+        <button id="btn-toggle-skin" class="btn-subtle btn-hud" title="캐릭터 외형 변경">👧 스킨: 미니 SD</button>
         <button id="btn-open-lobby" class="btn-subtle btn-hud">🏠 로비/방 메뉴</button>
         <button id="btn-settings" class="btn-subtle btn-hud" title="Gemini API 키 설정">🔑 API 설정</button>
       </div>
@@ -74,7 +97,12 @@
               <option value="stage3">스테이지 3: 미로 탈출</option>
               <option value="stage4">스테이지 4: 가시 다리와 점프</option>
               <option value="stage5">스테이지 5: 용암 협곡 우회로</option>
+              <option value="stage6">스테이지 6: 🧊 미끄러운 얼음 협곡</option>
+              <option value="stage7">스테이지 7: 🌀 차원 워프 포탈</option>
+              <option value="stage8">스테이지 8: ⏩ 컨베이어와 지뢰밭</option>
+              <option value="action_random">🎲 새로운 랜덤 맵 뽑기!</option>
             </select>
+            <button id="btn-random-map" class="btn-primary btn-sm" title="새로운 랜덤 맵 생성">🎲 랜덤 맵 생성</button>
           </div>
           <div class="control-group">
             <span id="submission-counter" class="submission-counter">제출 완료: 0 / 1</span>
@@ -87,7 +115,7 @@
           <input 
             type="text" 
             id="prompt-input" 
-            placeholder="30초 안에 구체적인 작전을 입력해봐! (예: 앞의 가시는 점프로 뛰어넘고 아래로 내려간 다음 오른쪽 보석으로 달려가!)" 
+            placeholder="작전을 입력해봐! (예: 가시를 뛰어넘고 오른쪽 보석으로 이동)" 
             maxlength="160"
             autocomplete="off"
           />
@@ -101,18 +129,18 @@
         <div class="action-log-container">
           <span class="log-label">AI 계획:</span>
           <div id="action-badges" class="action-badges">
-            <span class="badge-empty">30초 입력 시간이 끝나면 1P부터 순서대로 다함께 결과를 관전해!</span>
+            <span class="badge-empty">명령을 입력하면 계획이 표시돼.</span>
           </div>
         </div>
       </div>
     </footer>
 
-    <!-- 최초 실행: 방 만들기 / 방 찾기 (갈틱폰 스타일 로비 오버레이) -->
+    <!-- 로비 오버레이 -->
     <div id="lobby-overlay" class="lobby-overlay">
       <!-- 1. 시작 화면: 방 만들기 / 방 코드로 입장 -->
       <div id="lobby-home-card" class="lobby-card">
         <div class="lobby-logo">🤖 Prompt Carefully</div>
-        <p class="lobby-subtitle">방장이 호스트가 되는 3D AI 프롬프트 파티 게임!</p>
+        <p class="lobby-subtitle">3D AI 프롬프트 파티 게임</p>
 
         <div class="lobby-field">
           <label for="nickname-input">내 닉네임</label>
@@ -122,10 +150,9 @@
         <div class="lobby-split">
           <!-- 방 만들기 섹션 -->
           <div class="lobby-box">
-            <h4>👑 방 만들기 (호스트)</h4>
-            <p class="box-desc">방장이 되어 방 코드를 생성하고 친구들을 초대해!</p>
+            <h4>👑 방 만들기</h4>
             <div class="round-select-row">
-              <label for="create-max-rounds">최대 라운드 (1~8):</label>
+              <label for="create-max-rounds">라운드 수:</label>
               <select id="create-max-rounds">
                 <option value="1">1 라운드</option>
                 <option value="2">2 라운드</option>
@@ -137,13 +164,19 @@
                 <option value="8">8 라운드</option>
               </select>
             </div>
+            <div class="round-select-row">
+              <label for="create-map-mode">🗺️ 맵 모드:</label>
+              <select id="create-map-mode">
+                <option value="random" selected>🎲 매 라운드 랜덤 맵</option>
+                <option value="sequential">📜 스테이지 순차 진행</option>
+              </select>
+            </div>
             <button id="btn-create-room" class="btn-primary btn-full">방 만들기</button>
           </div>
 
-          <!-- 방 찾기(코드 입장) 섹션 -->
+          <!-- 방 입장 섹션 -->
           <div class="lobby-box">
-            <h4>🔍 방 찾기 (코드로 입장)</h4>
-            <p class="box-desc">방장에게 받은 4자리 방 코드를 입력해 입장해!</p>
+            <h4>🔍 방 입장하기</h4>
             <input 
               type="text" 
               id="join-code-input" 
@@ -157,8 +190,11 @@
         </div>
 
         <div class="lobby-solo-bar">
-          <span>혼자서 자유롭게 스테이지를 연습하고 싶다면?</span>
-          <button id="btn-solo-practice" class="btn-subtle">🎮 싱글 연습 모드</button>
+          <span>싱글 플레이:</span>
+          <div class="solo-btn-group">
+            <button id="btn-solo-practice" class="btn-subtle">🎮 스테이지 모드</button>
+            <button id="btn-solo-random" class="btn-primary">🎲 랜덤 맵 시작</button>
+          </div>
         </div>
       </div>
 
@@ -167,7 +203,7 @@
         <div class="room-header-row">
           <div>
             <span class="room-badge">대기실</span>
-            <h3 id="room-title-text">방장의 파티룸</h3>
+            <h3 id="room-title-text">대기실</h3>
           </div>
           <div class="room-code-box" id="btn-copy-code" title="클릭해서 방 코드 복사">
             <span class="code-label">방 코드</span>
@@ -176,13 +212,11 @@
           </div>
         </div>
 
-        <p class="room-guide-text">
-          갈틱폰처럼 위 <strong>방 코드</strong>를 친구에게 알려주면 바로 입장할 수 있어! (새 탭에서 같은 코드로 들어와도 바로 연결돼!)
-        </p>
+        <p class="room-guide-text">방 코드를 공유해 친구들과 함께 플레이해봐!</p>
 
         <div class="room-settings-bar">
           <div class="setting-item">
-            <label for="room-max-rounds">🎯 최대 라운드 (1~8):</label>
+            <label for="room-max-rounds">🎯 라운드 수:</label>
             <select id="room-max-rounds">
               <option value="1">1 라운드</option>
               <option value="2">2 라운드</option>
@@ -194,15 +228,22 @@
               <option value="8">8 라운드</option>
             </select>
           </div>
+          <div class="setting-item">
+            <label for="room-map-mode">🗺️ 맵 모드:</label>
+            <select id="room-map-mode">
+              <option value="random" selected>🎲 매 라운드 랜덤 맵</option>
+              <option value="sequential">📜 스테이지 순차 진행</option>
+            </select>
+          </div>
           <div class="setting-item rule-summary">
-            <span>규칙: 30초 명령 입력 ➔ 1P부터 다함께 관전 ➔ <strong>통과 +1점 / 단독 우승 +2점!</strong></span>
+            <span>규칙: 통과 시 +1점 / 단독 통과 시 +2점</span>
           </div>
         </div>
 
         <div class="player-list-section">
           <div class="player-list-header">
             <span>참가 플레이어 (<span id="lobby-player-count">1</span>명)</span>
-            <button id="btn-add-bot" class="btn-subtle btn-xs">+ 🤖 AI 봇 추가 (테스트/파티용)</button>
+            <button id="btn-add-bot" class="btn-subtle btn-xs">+ 🤖 AI 봇 추가</button>
           </div>
           <ul id="lobby-player-list" class="lobby-player-list"></ul>
         </div>
@@ -219,12 +260,12 @@
       <div class="modal-card summary-card">
         <div class="summary-badge" id="summary-badge">ROUND 1 결과</div>
         <h3 id="summary-title">라운드 정산</h3>
-        <p class="summary-desc" id="summary-desc">통과 +1점 / 단독 통과(단독 우승) 시 +2점!</p>
+        <p class="summary-desc" id="summary-desc">통과 시 +1점, 단독 통과 시 +2점</p>
 
         <ul id="summary-score-list" class="summary-score-list"></ul>
 
         <div class="modal-buttons summary-buttons">
-          <span id="summary-wait-host" class="summary-wait-text hidden">방장이 다음 라운드를 시작하길 기다리는 중...</span>
+          <span id="summary-wait-host" class="summary-wait-text hidden">다음 라운드 시작 대기 중...</span>
           <button id="btn-next-round" class="btn-primary btn-lg">다음 라운드로 ▶</button>
         </div>
       </div>
@@ -242,8 +283,7 @@
       <div class="modal-card">
         <h3>🔑 Gemini AI 설정</h3>
         <p class="modal-desc">
-          기본적으로 <strong>공유 프록시</strong>를 통해 최신 <strong>Gemini Flash</strong>가 자동 지원돼!<br>
-          (개인 API 키를 넣으면 본인의 전용 Gemini 할당량으로 우선 호출됩니다.)
+          기본 AI가 무료로 제공되며, 개인 Gemini API 키가 있는 경우 등록해 사용할 수 있어.
         </p>
         <div class="modal-input-group">
           <input type="password" id="api-key-input" placeholder="개인 API 키 (선택 사항: AIzaSy...)" />
@@ -262,6 +302,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/game.js?v=12"></script>
+  <script type="module" src="js/game.js?v=16"></script>
 </body>
 </html>

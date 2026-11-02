@@ -13,3 +13,6 @@ Thumbs.db
 # Node
 node_modules/
 npm-debug.log*
+
+# Large 3D Model Backups
+*_original.glb
